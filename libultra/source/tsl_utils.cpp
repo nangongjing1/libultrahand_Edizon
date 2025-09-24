@@ -522,8 +522,8 @@ namespace ult {
     std::string UNAVAILABLE_SELECTION = "Not available";
 
 
-    std::string ON = "On";
-    std::string OFF = "Off";
+    std::string ON = "\uE14B";
+    std::string OFF = "\uE14C";
 
     std::string OK = "OK";
     std::string BACK = "Back";
@@ -679,8 +679,8 @@ namespace ult {
         LAUNCH_COMBOS = "Launch Combos";
         NOTIFICATIONS = "Notifications";
         OPAQUE_SCREENSHOTS = "Opaque Screenshots";
-        ON = "On";
-        OFF = "Off";
+        ON = "\uE14B";
+        OFF = "\uE14C";
         PACKAGE_INFO = "Package Info";
         _TITLE = "Title";
         _VERSION= "Version";
@@ -992,6 +992,10 @@ namespace ult {
     
         // Iterate over the map to update global variables
         for (auto& kv : configMap) {
+            // 跳过对ON和OFF的语言更新
+            if (kv.first == "ON" || kv.first == "OFF") {
+                continue;
+            }
             auto it = jsonMap.find(kv.first);
             if (it != jsonMap.end()) {
                 updateIfNotEmpty(*kv.second, it->second);
@@ -1086,8 +1090,8 @@ namespace ult {
         #endif
     
         const std::unordered_map<std::string, std::string*> valueReplacements = {
-            {"On", &ON},
-            {"Off", &OFF}
+            {"\uE14B", &ON},
+            {"\uE14C", &OFF}
         };
     
         // Determine which map to use
