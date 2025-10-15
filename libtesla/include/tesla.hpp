@@ -48,7 +48,10 @@
 #include <strings.h>
 #include <math.h>
 
+#if !IS_LAUNCHER_DIRECTIVE
 #include <filesystem> // unused, but preserved for projects that might need it
+#endif
+
 #include <algorithm>
 #include <cstring>
 #include <cwctype>
@@ -137,14 +140,20 @@ volatile bool delayUpdate = false;
 volatile bool pendingExit = false;
 volatile bool wasRendering = false;
 
-LEvent renderingStopEvent = {0};
+LEvent renderingStopEvent;
 bool FullMode = true;
 bool deactivateOriginalFooter = false;
 //bool fontCache = true;
 bool disableJumpTo = false;
 
 // Check for mini/micro mode flags
-bool isMiniOrMicroMode = false;
+//bool isMiniOrMicroMode = false;
+inline std::string lastMode;
+inline std::set<std::string> overlayModes = {"full", "mini", "micro", "fps_graph", "fps_counter", "game_resolutions"};
+
+bool isValidOverlayMode() {
+    return overlayModes.count(lastMode) > 0;
+}
 
 #endif
 
@@ -322,13 +331,13 @@ namespace tsl {
     static Color packageTextColor = RGB888(ult::whiteColor);
     static Color ultPackageTextColor = RGB888("9ed0ff");
 
-    static Color bannerVersionTextColor = RGB888("AAAAAA");
-    static Color overlayVersionTextColor = RGB888("AAAAAA");
+    static Color bannerVersionTextColor = RGB888(ult::greyColor);
+    static Color overlayVersionTextColor = RGB888(ult::greyColor);
     static Color ultOverlayVersionTextColor = RGB888("00FFDD");
-    static Color packageVersionTextColor = RGB888("AAAAAA");
+    static Color packageVersionTextColor = RGB888(ult::greyColor);
     static Color ultPackageVersionTextColor = RGB888("00FFDD");
     static Color onTextColor = RGB888("00FFDD");
-    static Color offTextColor = RGB888("AAAAAA");
+    static Color offTextColor = RGB888(ult::greyColor);
     
     #if IS_LAUNCHER_DIRECTIVE
     static Color dynamicLogoRGB1 = RGB888("00E669");
@@ -1103,7 +1112,7 @@ namespace tsl {
             
             // Existing caches
             inline static std::unordered_map<u64, std::shared_ptr<Glyph>> s_sharedGlyphCache;
-            inline static std::unordered_map<u64, std::shared_ptr<Glyph>> s_persistentGlyphCache;
+            //inline static std::unordered_map<u64, std::shared_ptr<Glyph>> s_persistentGlyphCache;
             
             // NEW: Notification-specific cache
             inline static std::unordered_map<u64, std::shared_ptr<Glyph>> s_notificationGlyphCache;
@@ -1175,9 +1184,9 @@ namespace tsl {
                     case CacheType::Notification:
                         targetCache = &s_notificationGlyphCache;
                         break;
-                    case CacheType::Persistent:
-                        targetCache = &s_persistentGlyphCache;
-                        break;
+                    //case CacheType::Persistent:
+                    //    targetCache = &s_persistentGlyphCache;
+                    //    break;
                     default:
                         targetCache = &s_sharedGlyphCache;
                         break;
@@ -1197,12 +1206,12 @@ namespace tsl {
                     
                     // For notification cache, also check persistent cache (but not regular cache)
                     // For regular cache, also check persistent cache (existing behavior)
-                    if (cacheType != CacheType::Persistent) {
-                        auto persistentIt = s_persistentGlyphCache.find(key);
-                        if (persistentIt != s_persistentGlyphCache.end()) {
-                            return persistentIt->second;
-                        }
-                    }
+                    //if (cacheType != CacheType::Persistent) {
+                    //    auto persistentIt = s_persistentGlyphCache.find(key);
+                    //    if (persistentIt != s_persistentGlyphCache.end()) {
+                    //        return persistentIt->second;
+                    //    }
+                    //}
                 }
                 
                 // Glyph not found, need to create it with exclusive lock
@@ -1217,12 +1226,12 @@ namespace tsl {
                 }
                 
                 // Double-check persistent cache
-                if (cacheType != CacheType::Persistent) {
-                    auto persistentIt = s_persistentGlyphCache.find(key);
-                    if (persistentIt != s_persistentGlyphCache.end()) {
-                        return persistentIt->second;
-                    }
-                }
+                //if (cacheType != CacheType::Persistent) {
+                //    auto persistentIt = s_persistentGlyphCache.find(key);
+                //    if (persistentIt != s_persistentGlyphCache.end()) {
+                //        return persistentIt->second;
+                //    }
+                //}
                 
                 // Check cache size and cleanup if needed
                 if (cacheType == CacheType::Regular && s_sharedGlyphCache.size() >= MAX_CACHE_SIZE) {
@@ -1260,49 +1269,49 @@ namespace tsl {
             
         public:
             // NEW: Preload and persist specific characters
-            static void preloadPersistentGlyphs(const std::string& characters, u32 fontSize, bool monospace = false) {
-                std::unique_lock<std::shared_mutex> writeLock(s_cacheMutex);
-            
-                if (!s_initialized) return;
-            
-                // Convert UTF-8 string to UTF-32 codepoints
-                #pragma GCC diagnostic push
-                #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-                
-                std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-                const std::u32string codepoints = converter.from_bytes(characters);
-                
-                #pragma GCC diagnostic pop
-                
-                s32 yAdvance;
-                for (char32_t character : codepoints) {
-                    const u64 key = generateCacheKey(character, monospace, fontSize);
-            
-                    if (s_persistentGlyphCache.find(key) != s_persistentGlyphCache.end()) {
-                        continue;
-                    }
-            
-                    auto glyph = std::make_shared<Glyph>();
-                    glyph->currFont = selectFontForCharacterUnsafe(character);
-                    if (!glyph->currFont) continue;
-            
-                    glyph->currFontSize = stbtt_ScaleForPixelHeight(glyph->currFont, fontSize);
-            
-                    stbtt_GetCodepointBitmapBoxSubpixel(glyph->currFont, character,
-                                                        glyph->currFontSize, glyph->currFontSize, 0, 0,
-                                                        &glyph->bounds[0], &glyph->bounds[1], &glyph->bounds[2], &glyph->bounds[3]);
-            
-                    yAdvance = 0;
-                    stbtt_GetCodepointHMetrics(glyph->currFont, monospace ? 'W' : character,
-                                              &glyph->xAdvance, &yAdvance);
-            
-                    glyph->glyphBmp = stbtt_GetCodepointBitmap(glyph->currFont,
-                                                               glyph->currFontSize, glyph->currFontSize, character,
-                                                               &glyph->width, &glyph->height, nullptr, nullptr);
-            
-                    s_persistentGlyphCache[key] = glyph;
-                }
-            }
+            //static void preloadPersistentGlyphs(const std::string& characters, u32 fontSize, bool monospace = false) {
+            //    std::unique_lock<std::shared_mutex> writeLock(s_cacheMutex);
+            //    
+            //    if (!s_initialized) return;
+            //    
+            //    // Convert UTF-8 string to UTF-32 codepoints
+            //    #pragma GCC diagnostic push
+            //    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            //    
+            //    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+            //    const std::u32string codepoints = converter.from_bytes(characters);
+            //    
+            //    #pragma GCC diagnostic pop
+            //    
+            //    s32 yAdvance;
+            //    for (char32_t character : codepoints) {
+            //        const u64 key = generateCacheKey(character, monospace, fontSize);
+            //
+            //        if (s_persistentGlyphCache.find(key) != s_persistentGlyphCache.end()) {
+            //            continue;
+            //        }
+            //
+            //        auto glyph = std::make_shared<Glyph>();
+            //        glyph->currFont = selectFontForCharacterUnsafe(character);
+            //        if (!glyph->currFont) continue;
+            //
+            //        glyph->currFontSize = stbtt_ScaleForPixelHeight(glyph->currFont, fontSize);
+            //
+            //        stbtt_GetCodepointBitmapBoxSubpixel(glyph->currFont, character,
+            //                                            glyph->currFontSize, glyph->currFontSize, 0, 0,
+            //                                            &glyph->bounds[0], &glyph->bounds[1], &glyph->bounds[2], &glyph->bounds[3]);
+            //
+            //        yAdvance = 0;
+            //        stbtt_GetCodepointHMetrics(glyph->currFont, monospace ? 'W' : character,
+            //                                  &glyph->xAdvance, &yAdvance);
+            //
+            //        glyph->glyphBmp = stbtt_GetCodepointBitmap(glyph->currFont,
+            //                                                   glyph->currFontSize, glyph->currFontSize, character,
+            //                                                   &glyph->width, &glyph->height, nullptr, nullptr);
+            //
+            //        s_persistentGlyphCache[key] = glyph;
+            //    }
+            //}
         
 
             static void initializeFonts(stbtt_fontinfo* stdFont, stbtt_fontinfo* localFont, 
@@ -1398,8 +1407,8 @@ namespace tsl {
                 std::unique_lock<std::shared_mutex> cacheLock(s_cacheMutex);
                 s_sharedGlyphCache.clear();
                 s_sharedGlyphCache.rehash(0);
-                s_persistentGlyphCache.clear();
-                s_persistentGlyphCache.rehash(0);
+                //s_persistentGlyphCache.clear();
+                //s_persistentGlyphCache.rehash(0);
                 s_notificationGlyphCache.clear();
                 s_notificationGlyphCache.rehash(0);
                 s_fontMetricsCache.clear();
@@ -1412,8 +1421,8 @@ namespace tsl {
                 
                 s_sharedGlyphCache.clear();
                 s_sharedGlyphCache.rehash(0);
-                s_persistentGlyphCache.clear();
-                s_persistentGlyphCache.rehash(0);
+                //s_persistentGlyphCache.clear();
+                //s_persistentGlyphCache.rehash(0);
                 s_notificationGlyphCache.clear();
                 s_notificationGlyphCache.rehash(0);
                 s_fontMetricsCache.clear();
@@ -1439,10 +1448,10 @@ namespace tsl {
                 return s_initialized;
             }
 
-            static size_t getPersistentCacheSize() {
-                std::shared_lock<std::shared_mutex> lock(s_cacheMutex);
-                return s_persistentGlyphCache.size();
-            }
+            //static size_t getPersistentCacheSize() {
+            //    std::shared_lock<std::shared_mutex> lock(s_cacheMutex);
+            //    return s_persistentGlyphCache.size();
+            //}
 
             // NEW: Get notification cache size
             static size_t getNotificationCacheSize() {
@@ -1464,12 +1473,12 @@ namespace tsl {
                 }
                 
                 // Persistent cache
-                for (const auto& pair : s_persistentGlyphCache) {
-                    const auto& glyph = pair.second;
-                    if (glyph && glyph->glyphBmp) {
-                        totalMemory += glyph->width * glyph->height;
-                    }
-                }
+                //for (const auto& pair : s_persistentGlyphCache) {
+                //    const auto& glyph = pair.second;
+                //    if (glyph && glyph->glyphBmp) {
+                //        totalMemory += glyph->width * glyph->height;
+                //    }
+                //}
 
                 // Notification cache
                 for (const auto& pair : s_notificationGlyphCache) {
@@ -1494,6 +1503,7 @@ namespace tsl {
                 return s_stdFont;
             }
         };
+
         
         // Static member definitions
         //std::shared_mutex FontManager::s_cacheMutex;
@@ -1520,18 +1530,8 @@ namespace tsl {
                 if (translatedIt != ult::translationCache.end()) {
                     text = translatedIt->second;
                 } else {
-                    // Need to upgrade to write lock
-                    readLock.unlock();
-                    std::unique_lock<std::shared_mutex> writeLock(s_translationCacheMutex);
-                    
-                    // Double-check pattern
-                    translatedIt = ult::translationCache.find(originalString);
-                    if (translatedIt != ult::translationCache.end()) {
-                        text = translatedIt->second;
-                    } else {
-                        ult::translationCache[originalString] = originalString;
-                        text = originalString;
-                    }
+                    // Don't insert anything, just fallback to original string
+                    text = originalString;
                 }
             }
             #else
@@ -2929,7 +2929,7 @@ namespace tsl {
                 return m_stdFont;
             }
                     
-        
+            
             // Optimized unified drawString method with thread safety
             inline std::pair<s32, s32> drawString(const std::string& originalString, bool monospace, 
                                                   const s32 x, const s32 y, const u32 fontSize, 
@@ -2943,25 +2943,15 @@ namespace tsl {
                 
                 // Thread-safe translation cache access
                 std::string text;
-                #ifdef UI_OVERRIDE_PATH
+                #if defined(UI_OVERRIDE_PATH)// && (!defined(IS_STATUS_MONITOR) || (IS_STATUS_MONITOR == 0))
                 {
                     std::shared_lock<std::shared_mutex> readLock(s_translationCacheMutex);
                     auto translatedIt = ult::translationCache.find(originalString);
                     if (translatedIt != ult::translationCache.end()) {
                         text = translatedIt->second;
                     } else {
-                        // Need to upgrade to write lock
-                        readLock.unlock();
-                        std::unique_lock<std::shared_mutex> writeLock(s_translationCacheMutex);
-                        
-                        // Double-check pattern
-                        translatedIt = ult::translationCache.find(originalString);
-                        if (translatedIt != ult::translationCache.end()) {
-                            text = translatedIt->second;
-                        } else {
-                            ult::translationCache[originalString] = originalString;
-                            text = originalString;
-                        }
+                        // Don't insert anything, just fallback to original string
+                        text = originalString;
                     }
                 }
                 #else
@@ -3207,18 +3197,8 @@ namespace tsl {
                     if (translatedIt != ult::translationCache.end()) {
                         text = translatedIt->second;
                     } else {
-                        // Need to upgrade to write lock
-                        readLock.unlock();
-                        std::unique_lock<std::shared_mutex> writeLock(s_translationCacheMutex);
-                        
-                        // Double-check pattern
-                        translatedIt = ult::translationCache.find(originalString);
-                        if (translatedIt != ult::translationCache.end()) {
-                            text = translatedIt->second;
-                        } else {
-                            ult::translationCache[originalString] = originalString;
-                            text = originalString;
-                        }
+                        // Don't insert anything, just fallback to original string
+                        text = originalString;
                     }
                 }
                 #else
@@ -4007,29 +3987,29 @@ namespace tsl {
              * @warning Don't call this before calling \ref startFrame once
              */
             inline void endFrame() {
-                #if IS_STATUS_MONITOR_DIRECTIVE
-                // Check if rendering is active by testing if the stop event is NOT signaled
-                if (isRendering) {  // Returns true if event is signaled
-                    //memcpy(this->getNextFramebuffer(), this->getCurrentFramebuffer(), this->getFramebufferSize());
-                    
+            #if IS_STATUS_MONITOR_DIRECTIVE
+                if (isRendering) {
                     static u32 lastFPS = 0;
-                    static u64 cachedIntervalNs = 0;
-                    
-                    if (__builtin_expect(TeslaFPS != lastFPS, 0)) { // Hint: FPS changes are rare
-                        cachedIntervalNs = 1000*1000*1000ULL / TeslaFPS;
-                        lastFPS = TeslaFPS;
+                    static u64 cachedIntervalNs = 1000000000ULL / 60; // Default to 60 FPS
+            
+                    u32 fps = TeslaFPS;
+                    if (__builtin_expect(fps != lastFPS, 0)) {
+                        cachedIntervalNs = (fps > 0) ? (1000000000ULL / fps) : cachedIntervalNs;
+                        lastFPS = fps;
                     }
-                    
-                    // Wait for frame interval or rendering stop event
+            
+                    // Frame pacing before VSync
                     leventWait(&renderingStopEvent, cachedIntervalNs);
                 }
-                #endif
+            #endif
+            
+                // Then hardware sync
                 this->waitForVSync();
                 framebufferEnd(&this->m_framebuffer);
                 this->m_currentFramebuffer = nullptr;
-                if (tsl::clearGlyphCacheNow.load(std::memory_order_acquire)) {
-                    tsl::clearGlyphCacheNow.store(false, std::memory_order_release);
-                    tsl::gfx::FontManager::clearCache();       // exclusive clear
+            
+                if (tsl::clearGlyphCacheNow.exchange(false)) {
+                    tsl::gfx::FontManager::clearCache();
                 }
             }
 
@@ -5297,8 +5277,8 @@ namespace tsl {
 
                 if (FullMode)
                     ult::loadWallpaperFileWhenSafe();
-                else
-                    svcSleepThread(180'000); // sleep thread for initial values to auto-load
+                //else
+                //    svcSleepThread(250'000); // sleep thread for initial values to auto-load
 
                 m_isItem = false;
             }
@@ -5322,7 +5302,8 @@ namespace tsl {
                 
                 if (FullMode == true) {
                     renderer->fillScreen(a(defaultBackgroundColor));
-                    renderer->drawWallpaper();
+                    if (lastMode.empty())
+                        renderer->drawWallpaper();
                 } else {
                     renderer->fillScreen({ 0x0, 0x0, 0x0, 0x0});
                 }
@@ -11123,27 +11104,22 @@ namespace tsl {
                 renderer.clearScreen();
             }
         
-            // Notification handling - safer approach with consistent ordering
+            // Notification handling — safe, consistent, and null-guarded
             {
-                if (notification) {
-                    
-                    if (notification->isActive()) {
-                        // Snapshot pointer to avoid it becoming null mid-use
-                        notification->update();
-                        notification->draw(&renderer, promptOnly);
-                        notificationCacheNeedsClearing.store(true, std::memory_order_release);
-                    } else {
-                        if (notificationCacheNeedsClearing.exchange(false, std::memory_order_acq_rel)) {
-                            tsl::gfx::FontManager::clearNotificationCache();
-                            #if IS_STATUS_MONITOR_DIRECTIVE
-                            if (wasRendering) {
-                                wasRendering = false;
-                                isRendering = true;
-                                leventClear(&renderingStopEvent);
-                            }
-                            #endif
-                        }
+                if (notification && notification->isActive()) {
+                    // Snapshot pointer to avoid it becoming null mid-use
+                    notification->update();
+                    notification->draw(&renderer, promptOnly);
+                    notificationCacheNeedsClearing.store(true, std::memory_order_release);
+                } else if (notificationCacheNeedsClearing.exchange(false, std::memory_order_acq_rel)) {
+                    tsl::gfx::FontManager::clearNotificationCache();
+                    #if IS_STATUS_MONITOR_DIRECTIVE
+                    if (wasRendering) {
+                        wasRendering = false;
+                        isRendering = true;
+                        leventClear(&renderingStopEvent);
                     }
+                    #endif
                 }
             }
         
@@ -12289,16 +12265,16 @@ namespace tsl {
             auto lastTouchY = 0;
         
             // Preset touch boundaries
-            static constexpr int SWIPE_RIGHT_BOUND = 16;  // 16 + 80
-            static constexpr int SWIPE_LEFT_BOUND = (1280 - 16);
-            static constexpr u64 TOUCH_THRESHOLD_NS = 150'000'000ULL; // 150ms in nanoseconds
-            static constexpr u64 FAST_SWAP_THRESHOLD_NS = 150'000'000ULL;
+            constexpr int SWIPE_RIGHT_BOUND = 16;  // 16 + 80
+            constexpr int SWIPE_LEFT_BOUND = (1280 - 16);
+            constexpr u64 TOUCH_THRESHOLD_NS = 150'000'000ULL; // 150ms in nanoseconds
+            constexpr u64 FAST_SWAP_THRESHOLD_NS = 150'000'000ULL;
         
             // Global underscan monitoring - run at most once every 300ms
-            static auto lastUnderscanPixels = std::make_pair(0, 0);
-            static bool firstUnderscanCheck = true;
-            static u64 lastUnderscanCheckNs = 0;  // store last execution in nanoseconds
-            static constexpr u64 UNDERSCAN_INTERVAL_NS = 300'000'000ULL; // 300ms in ns
+            auto lastUnderscanPixels = std::make_pair(0, 0);
+            bool firstUnderscanCheck = true;
+            u64 lastUnderscanCheckNs = 0;  // store last execution in nanoseconds
+            constexpr u64 UNDERSCAN_INTERVAL_NS = 300'000'000ULL; // 300ms in ns
 
             s32 idx;
             Result rc;
@@ -12312,6 +12288,14 @@ namespace tsl {
             ult::lastTitleID = ult::getTitleIdAsString();
         
             //u64 elapsedTime_ns;
+
+            // Notification variables
+            u64 lastNotifCheck = 0;
+            std::vector<std::string> shownFiles;
+            std::string text;
+            int fontSize;
+            int priority;
+
             
             while (shData->running.load(std::memory_order_acquire)) {
 
@@ -12326,11 +12310,6 @@ namespace tsl {
                 
                 // Read in HID values
                 {
-                    if (ult::launchingOverlay.load(std::memory_order_acquire))
-                        break;
-                    std::scoped_lock lock(shData->dataMutex);
-                    if (ult::launchingOverlay.load(std::memory_order_acquire))
-                        break;
 
                     // Poll Title ID every 1 seconds
                     if (!ult::resetForegroundCheck.load(std::memory_order_acquire)) {
@@ -12353,7 +12332,7 @@ namespace tsl {
                         if (resetElapsedNs >= 3'500'000'000ULL) {
                             if (shData->overlayOpen && ult::currentForeground.load(std::memory_order_acquire)) {
                                 #if IS_STATUS_MONITOR_DIRECTIVE
-                                if (!isMiniOrMicroMode)
+                                if (!isValidOverlayMode())
                                     hlp::requestForeground(true, false);
                                 #else
                                 hlp::requestForeground(true, false);
@@ -12387,7 +12366,7 @@ namespace tsl {
                     // Process notification files every 300ms
                     {
                         std::lock_guard<std::mutex> jsonLock(notificationJsonMutex);
-                        static u64 lastNotifCheck = 0;
+                        //static u64 lastNotifCheck = 0;
                     
                         if (armTicksToNs(nowTick - lastNotifCheck) >= 300'000'000ULL) {
                             lastNotifCheck = nowTick;
@@ -12402,7 +12381,7 @@ namespace tsl {
                                     
                                     const std::string& notifPath = ult::NOTIFICATIONS_PATH;
                                     
-                                    static std::vector<std::string> shownFiles;
+                                    //static std::vector<std::string> shownFiles;
                                     
                                     // Structure to hold file info with creation time
                                     struct NotificationFile {
@@ -12424,9 +12403,9 @@ namespace tsl {
                                         }
                                     }
                                     
-                                    static std::string text;
-                                    static int fontSize;
-                                    static int priority;
+                                    //static std::string text;
+                                    //static int fontSize;
+                                    //static int priority;
                                     
                                     // --- Collect notification files with creation time ---
                                     while ((entry = readdir(dir)) != nullptr) {
@@ -12538,7 +12517,11 @@ namespace tsl {
                     }
 
 
-
+                    if (ult::launchingOverlay.load(std::memory_order_acquire))
+                        break;
+                    std::scoped_lock lock(shData->dataMutex);
+                    if (ult::launchingOverlay.load(std::memory_order_acquire))
+                        break;
 
                     
                     // Combine inputs from both controllers
@@ -12861,7 +12844,7 @@ namespace tsl {
         
         #if IS_STATUS_MONITOR_DIRECTIVE
                     if (idx == WaiterObject_HomeButton || idx == WaiterObject_PowerButton) { // Changed condition to exclude capture button
-                        if (shData->overlayOpen && !isMiniOrMicroMode) {
+                        if (shData->overlayOpen && !isValidOverlayMode()) {
                             tsl::Overlay::get()->hide();
                             shData->overlayOpen = false;
                         }
@@ -12906,7 +12889,8 @@ namespace tsl {
                             }
 
                             #if IS_STATUS_MONITOR_DIRECTIVE
-                            if (isMiniOrMicroMode) {
+                            bool inOverlayMode = isValidOverlayMode();
+                            if (inOverlayMode) {
                                 delayUpdate = true;
                                 isRendering = false;
                                 leventSignal(&renderingStopEvent);
@@ -12919,7 +12903,7 @@ namespace tsl {
                             ult::disableTransparency = false;
         
                             #if IS_STATUS_MONITOR_DIRECTIVE
-                            if (isMiniOrMicroMode) {
+                            if (inOverlayMode) {
                                 isRendering = true;
                                 leventClear(&renderingStopEvent);
                                 delayUpdate = false;
@@ -13119,7 +13103,9 @@ namespace tsl {
     static inline int loop(int argc, char** argv) {
         static_assert(std::is_base_of_v<tsl::Overlay, TOverlay>, "tsl::loop expects a type derived from tsl::Overlay");
 
-
+    #if IS_STATUS_MONITOR_DIRECTIVE
+        leventClear(&renderingStopEvent);
+    #endif
 
         // Initialize buffer sizes based on expanded memory setting
         if (ult::expandedMemory) {
@@ -13139,19 +13125,19 @@ namespace tsl {
             bool skip;
             for (u8 arg = 1; arg < argc; arg++) {
                 const char* s = argv[arg];
-    #if IS_STATUS_MONITOR_DIRECTIVE
-                if (s[0] == '-') {
-                    if (s[1] == 'm') {
-                        if (strcasecmp(s, "-mini") == 0 || strcasecmp(s, "-micro") == 0) {
-                            isMiniOrMicroMode = true;
-                        }
-                    } else if (s[1] == '-' && s[2] == 'm') {
-                        if (strcasecmp(s, "--miniOverlay") == 0 || strcasecmp(s, "--microOverlay") == 0) {
-                            isMiniOrMicroMode = true;
-                        }
-                    }
-                }
-    #endif
+    //#if IS_STATUS_MONITOR_DIRECTIVE
+    //            if (s[0] == '-') {
+    //                if (s[1] == 'm') {
+    //                    if (strcasecmp(s, "-mini") == 0 || strcasecmp(s, "-micro") == 0) {
+    //                        isMiniOrMicroMode = true;
+    //                    }
+    //                } else if (s[1] == '-' && s[2] == 'm') {
+    //                    if (strcasecmp(s, "--miniOverlay") == 0 || strcasecmp(s, "--microOverlay") == 0) {
+    //                        isMiniOrMicroMode = true;
+    //                    }
+    //                }
+    //            }
+    //#endif
                 skip = false;
     
                 if (arg > 1) {
@@ -13402,7 +13388,7 @@ namespace tsl {
                     shData.overlayOpen.store(true, std::memory_order_release);
     
     #if IS_STATUS_MONITOR_DIRECTIVE
-                    if (!isMiniOrMicroMode)
+                    if (!isValidOverlayMode())
                         hlp::requestForeground(true);
     #else
                     hlp::requestForeground(true);
