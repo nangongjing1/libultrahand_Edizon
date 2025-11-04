@@ -67,6 +67,7 @@
 #include <map>
 //#include <barrier>
 
+
 // Define this makro before including tesla.hpp in your main file. If you intend
 // to use the tesla.hpp header in more than one source file, only define it once!
 // #define TESLA_INIT_IMPL
@@ -182,7 +183,7 @@ inline std::atomic<bool> jumpItemExactMatch{true};
 
 inline std::atomic<bool> s_onLeftPage{false};
 inline std::atomic<bool> s_onRightPage{false};
-inline bool screenshotsAreDisabled = false;
+inline std::atomic<bool> screenshotsAreDisabled{false};
 inline std::atomic<bool> screenshotsAreForceDisabled{false};
 
 //#if IS_LAUNCHER_DIRECTIVE
@@ -192,6 +193,42 @@ inline bool hideHidden = false;
 //inline std::atomic<bool> isLaunchingNextOverlay{false};
 inline std::atomic<bool> mainComboHasTriggered{false};
 inline std::atomic<bool> launchComboHasTriggered{false};
+
+
+
+// Sound triggering variables
+inline std::atomic<bool> triggerNavigationSound{false};
+inline std::atomic<bool> triggerEnterSound{false};
+inline std::atomic<bool> triggerExitSound{false};
+inline std::atomic<bool> triggerWallSound{false};
+inline std::atomic<bool> triggerOnSound{false};
+inline std::atomic<bool> triggerOffSound{false};
+inline std::atomic<bool> triggerSettingsSound{false};
+inline std::atomic<bool> triggerMoveSound{false};
+inline std::atomic<bool> disableSound{false};
+//inline std::atomic<bool> clearSoundCacheNow{false};
+inline std::atomic<bool> reloadSoundCacheNow{false};
+
+// Haptic triggering variables
+inline std::atomic<bool> triggerRumbleClick{false};
+inline std::atomic<bool> triggerRumbleDoubleClick{false};
+
+
+static inline void triggerNavigationFeedback() {
+    triggerRumbleClick.store(true, std::memory_order_release);
+    triggerNavigationSound.store(true, std::memory_order_release);
+}
+
+static inline void triggerEnterFeedback() {
+    triggerRumbleClick.store(true, std::memory_order_release);
+    triggerEnterSound.store(true, std::memory_order_release);
+}
+
+static inline void triggerExitFeedback() {
+    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+    triggerExitSound.store(true, std::memory_order_release);
+}
+
 
 namespace tsl {
 
@@ -395,124 +432,99 @@ namespace tsl {
     static Color trackBarFullColor = RGB888("00FFDD");
     static Color trackBarEmptyColor = RGB888("404040");
     
-    static void initializeThemeVars() { // NOTE: This needs to be called once in your application.
-        // Fetch all theme settings at once from the INI file
+    static void initializeThemeVars() {
         auto themeData = ult::getParsedDataFromIniFile(ult::THEME_CONFIG_INI_PATH);
-        if (themeData.count(ult::THEME_STR) > 0) {
-            auto& themeSection = themeData[ult::THEME_STR];
-            
-            // Fetch and process each theme setting using a helper to simplify fetching and fallback
-            auto getValue = [&](const std::string& key) {
-                return themeSection.count(key) ? themeSection[key] : ult::defaultThemeSettingsMap[key];
-            };
-            
-            // Convert hex color to Color and manage default values and conversion
-            auto getColor = [&](const std::string& key, size_t alpha = 15) {
-                //std::string hexColor = getValue(key);
-                return RGB888(getValue(key), alpha);
-            };
-            
-            auto getAlpha = [&](const std::string& key) {
-                std::string alphaStr = getValue(key);
-                return !alphaStr.empty() ? ult::stoi(alphaStr) : ult::stoi(ult::defaultThemeSettingsMap[key]);
-            };
-            
-            //disableColorfulLogo = (getValue("disable_colorful_logo") == ult::TRUE_STR);
-            
-            #if IS_LAUNCHER_DIRECTIVE
-            logoColor1 = getColor("logo_color_1");
-            logoColor2 = getColor("logo_color_2");
-            #endif
-
-            defaultBackgroundAlpha = getAlpha("bg_alpha");
-            defaultBackgroundColor = getColor("bg_color", defaultBackgroundAlpha);
-            defaultTextColor = getColor("text_color");
-            notificationTextColor = getColor("notification_text_color");
-            headerTextColor = getColor("header_text_color");
-            headerSeparatorColor = getColor("header_separator_color");
-            starColor = getColor("star_color");
-            selectionStarColor = getColor("selection_star_color");
-            buttonColor = getColor("bottom_button_color");
-            bottomTextColor = getColor("bottom_text_color");
-            bottomSeparatorColor = getColor("bottom_separator_color");
-            topSeparatorColor = getColor("top_separator_color");
-            defaultOverlayColor = getColor("default_overlay_color");
-            defaultPackageColor = getColor("default_package_color");
-            defaultScriptColor = getColor("default_script_color");
-
-            clockColor = getColor("clock_color");
-            temperatureColor = getColor("temperature_color");
-            batteryColor = getColor("battery_color");
-            batteryChargingColor = getColor("battery_charging_color");
-            batteryLowColor = getColor("battery_low_color");
-            widgetBackdropAlpha = getAlpha("widget_backdrop_alpha");
-            widgetBackdropColor = getColor("widget_backdrop_color", widgetBackdropAlpha);
-            
-            overlayTextColor = getColor("overlay_text_color");
-            ultOverlayTextColor = getColor("ult_overlay_text_color");
-            packageTextColor = getColor("package_text_color");
-            ultPackageTextColor = getColor("ult_package_text_color");
-
-            bannerVersionTextColor = getColor("banner_version_text_color");
-            overlayVersionTextColor = getColor("overlay_version_text_color");
-            ultOverlayVersionTextColor = getColor("ult_overlay_version_text_color");
-            packageVersionTextColor =getColor("package_version_text_color");
-            ultPackageVersionTextColor = getColor("ult_package_version_text_color");
-            onTextColor = getColor("on_text_color");
-            offTextColor = getColor("off_text_color");
-            
-            #if IS_LAUNCHER_DIRECTIVE
-            dynamicLogoRGB1 = getColor("dynamic_logo_color_1");
-            dynamicLogoRGB2 = getColor("dynamic_logo_color_2");
-            #endif
-
-            //disableSelectionBG = (getValue("disable_selection_bg") == ult::TRUE_STR);
-            //disableSelectionValueColor = (getValue("disable_selection_value_color") == ult::TRUE_STR);
-            invertBGClickColor = (getValue("invert_bg_click_color") == ult::TRUE_STR);
-
-            selectionBGAlpha = getAlpha("selection_bg_alpha");
-            selectionBGColor = getColor("selection_bg_color", selectionBGAlpha);
-            
-            highlightColor1 = getColor("highlight_color_1");
-            highlightColor2 = getColor("highlight_color_2");
-            highlightColor3 = getColor("highlight_color_3");
-            highlightColor4 = getColor("highlight_color_4");
-            
-            clickAlpha = getAlpha("click_alpha");
-            clickColor = getColor("click_color", clickAlpha);
-
-            progressAlpha = getAlpha("progress_alpha");
-            progressColor = getColor("progress_color", progressAlpha);
-
-            trackBarColor = getColor("trackbar_color");
-            
-            separatorAlpha = getAlpha("separator_alpha");
-            separatorColor = getColor("separator_color", separatorAlpha);
-
-            textSeparatorColor = getColor("text_separator_color");
-            
-            selectedTextColor = getColor("selection_text_color");
-            selectedValueTextColor = getColor("selection_value_text_color");
-            inprogressTextColor = getColor("inprogress_text_color");
-            invalidTextColor = getColor("invalid_text_color");
-            clickTextColor = getColor("click_text_color");
-            
-            tableBGAlpha = getAlpha("table_bg_alpha");
-            tableBGColor = getColor("table_bg_color", tableBGAlpha);
-            sectionTextColor = getColor("table_section_text_color");
-            infoTextColor = getColor("table_info_text_color");
-            warningTextColor = getColor("warning_text_color");
-
-            healthyRamTextColor = getColor("healthy_ram_text_color");
-            neutralRamTextColor = getColor("neutral_ram_text_color");
-            badRamTextColor = getColor("bad_ram_text_color");
-
-            trackBarSliderColor = getColor("trackbar_slider_color");
-            trackBarSliderBorderColor = getColor("trackbar_slider_border_color");
-            trackBarSliderMalleableColor = getColor("trackbar_slider_malleable_color");
-            trackBarFullColor = getColor("trackbar_full_color");
-            trackBarEmptyColor = getColor("trackbar_empty_color");
-        }
+        if (themeData.count(ult::THEME_STR) == 0) return;
+        
+        auto& themeSection = themeData[ult::THEME_STR];
+        
+        auto getValue = [&](const char* key) -> const std::string& {
+            auto it = themeSection.find(key);
+            return it != themeSection.end() ? it->second : ult::defaultThemeSettingsMap[key];
+        };
+        
+        auto getColor = [&](const char* key, size_t alpha = 15) {
+            return RGB888(getValue(key), alpha);
+        };
+        
+        auto getAlpha = [&](const char* key) {
+            const auto& alphaStr = getValue(key);
+            return ult::stoi(alphaStr);
+        };
+        
+        #if IS_LAUNCHER_DIRECTIVE
+        logoColor1 = getColor("logo_color_1");
+        logoColor2 = getColor("logo_color_2");
+        dynamicLogoRGB1 = getColor("dynamic_logo_color_1");
+        dynamicLogoRGB2 = getColor("dynamic_logo_color_2");
+        #endif
+    
+        defaultBackgroundAlpha = getAlpha("bg_alpha");
+        defaultBackgroundColor = getColor("bg_color", defaultBackgroundAlpha);
+        defaultTextColor = getColor("text_color");
+        notificationTextColor = getColor("notification_text_color");
+        headerTextColor = getColor("header_text_color");
+        headerSeparatorColor = getColor("header_separator_color");
+        starColor = getColor("star_color");
+        selectionStarColor = getColor("selection_star_color");
+        buttonColor = getColor("bottom_button_color");
+        bottomTextColor = getColor("bottom_text_color");
+        bottomSeparatorColor = getColor("bottom_separator_color");
+        topSeparatorColor = getColor("top_separator_color");
+        defaultOverlayColor = getColor("default_overlay_color");
+        defaultPackageColor = getColor("default_package_color");
+        defaultScriptColor = getColor("default_script_color");
+        clockColor = getColor("clock_color");
+        temperatureColor = getColor("temperature_color");
+        batteryColor = getColor("battery_color");
+        batteryChargingColor = getColor("battery_charging_color");
+        batteryLowColor = getColor("battery_low_color");
+        widgetBackdropAlpha = getAlpha("widget_backdrop_alpha");
+        widgetBackdropColor = getColor("widget_backdrop_color", widgetBackdropAlpha);
+        overlayTextColor = getColor("overlay_text_color");
+        ultOverlayTextColor = getColor("ult_overlay_text_color");
+        packageTextColor = getColor("package_text_color");
+        ultPackageTextColor = getColor("ult_package_text_color");
+        bannerVersionTextColor = getColor("banner_version_text_color");
+        overlayVersionTextColor = getColor("overlay_version_text_color");
+        ultOverlayVersionTextColor = getColor("ult_overlay_version_text_color");
+        packageVersionTextColor = getColor("package_version_text_color");
+        ultPackageVersionTextColor = getColor("ult_package_version_text_color");
+        onTextColor = getColor("on_text_color");
+        offTextColor = getColor("off_text_color");
+        invertBGClickColor = (getValue("invert_bg_click_color") == ult::TRUE_STR);
+        selectionBGAlpha = getAlpha("selection_bg_alpha");
+        selectionBGColor = getColor("selection_bg_color", selectionBGAlpha);
+        highlightColor1 = getColor("highlight_color_1");
+        highlightColor2 = getColor("highlight_color_2");
+        highlightColor3 = getColor("highlight_color_3");
+        highlightColor4 = getColor("highlight_color_4");
+        clickAlpha = getAlpha("click_alpha");
+        clickColor = getColor("click_color", clickAlpha);
+        progressAlpha = getAlpha("progress_alpha");
+        progressColor = getColor("progress_color", progressAlpha);
+        trackBarColor = getColor("trackbar_color");
+        separatorAlpha = getAlpha("separator_alpha");
+        separatorColor = getColor("separator_color", separatorAlpha);
+        textSeparatorColor = getColor("text_separator_color");
+        selectedTextColor = getColor("selection_text_color");
+        selectedValueTextColor = getColor("selection_value_text_color");
+        inprogressTextColor = getColor("inprogress_text_color");
+        invalidTextColor = getColor("invalid_text_color");
+        clickTextColor = getColor("click_text_color");
+        tableBGAlpha = getAlpha("table_bg_alpha");
+        tableBGColor = getColor("table_bg_color", tableBGAlpha);
+        sectionTextColor = getColor("table_section_text_color");
+        infoTextColor = getColor("table_info_text_color");
+        warningTextColor = getColor("warning_text_color");
+        healthyRamTextColor = getColor("healthy_ram_text_color");
+        neutralRamTextColor = getColor("neutral_ram_text_color");
+        badRamTextColor = getColor("bad_ram_text_color");
+        trackBarSliderColor = getColor("trackbar_slider_color");
+        trackBarSliderBorderColor = getColor("trackbar_slider_border_color");
+        trackBarSliderMalleableColor = getColor("trackbar_slider_malleable_color");
+        trackBarFullColor = getColor("trackbar_full_color");
+        trackBarEmptyColor = getColor("trackbar_empty_color");
     }
     
     #if !IS_LAUNCHER_DIRECTIVE
@@ -569,6 +581,8 @@ namespace tsl {
         } else {
             ult::deleteFileOrDirectory(ult::NOTIFICATIONS_FLAG_FILEPATH);
         }
+        ult::useSoundEffects = getBoolValue("sound_effects", false);
+        ult::useHapticFeedback = getBoolValue("haptic_feedback", false);
 
         ult::useSwipeToOpen = getBoolValue("swipe_to_open", true);        // TRUE_STR default
         ult::useOpaqueScreenshots = getBoolValue("opaque_screenshots", true); // TRUE_STR default
@@ -2502,98 +2516,6 @@ namespace tsl {
                 0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255
             };
             
-//            inline void processBMPChunk(const s32 x, const s32 y, const s32 screenW, const u8 *preprocessedData, 
-//                                       const s32 startRow, const s32 endRow) {
-//                const s32 bytesPerRow = screenW * 2;
-//                const s32 endX16 = screenW & ~15;
-//                
-//                // Pre-declare all variables outside loops to avoid repeated allocations
-//                const u8 *rowPtr;
-//                s32 baseY;
-//                s32 x1;
-//                const u8* ptr;
-//                uint8x16x2_t packed;
-//                uint8x16_t high1, low1, high2, low2;
-//                uint8x16_t red, green, blue, alpha;
-//                alignas(16) u8 red_vals[16], green_vals[16], blue_vals[16], alpha_vals[16];
-//                s32 baseX;
-//                s32 pixelX;
-//                u32 offset;
-//                Color color = {0}, src = {0}, end = {0};
-//                const u16* framebuffer;
-//                u8 p1, p2;
-//                
-//                for (s32 y1 = startRow; y1 < endRow; ++y1) {
-//                    rowPtr = preprocessedData + (y1 * bytesPerRow);
-//                    baseY = y + y1;
-//                    
-//                    x1 = 0;
-//                    
-//                    // SIMD processing for 16 pixels at once
-//                    for (; x1 < endX16; x1 += 16) {
-//                        ptr = rowPtr + (x1 << 1);
-//                        packed = vld2q_u8(ptr);
-//                        
-//                        // Expand 4-bit to 8-bit values
-//                        high1 = vshrq_n_u8(packed.val[0], 4);
-//                        low1  = vandq_u8(packed.val[0], mask_low);
-//                        high2 = vshrq_n_u8(packed.val[1], 4);
-//                        low2  = vandq_u8(packed.val[1], mask_low);
-//                        
-//                        red   = vqtbl1q_u8(lut, high1);
-//                        green = vqtbl1q_u8(lut, low1);
-//                        blue  = vqtbl1q_u8(lut, high2);
-//                        alpha = vqtbl1q_u8(lut, low2);
-//                        
-//                        // Store to arrays and process individually
-//                        vst1q_u8(red_vals, red);
-//                        vst1q_u8(green_vals, green); 
-//                        vst1q_u8(blue_vals, blue);
-//                        vst1q_u8(alpha_vals, alpha);
-//                        
-//                        baseX = x + x1;
-//                        
-//                        // Process 16 pixels with minimal function call overhead
-//                        for (int i = 0; i < 16; ++i) {
-//                            // Skip transparent pixels
-//                            if (alpha_vals[i] == 0) continue;
-//                            
-//                            pixelX = baseX + i;
-//                            offset = this->getPixelOffset(pixelX, baseY);
-//                            
-//                            if (offset != UINT32_MAX) {
-//                                color = {red_vals[i], green_vals[i], blue_vals[i], alpha_vals[i]};
-//                                
-//                                framebuffer = static_cast<const u16*>(this->getCurrentFramebuffer());
-//                                src = Color(framebuffer[offset]);
-//                                
-//                                end = {
-//                                    blendColor(src.r, color.r, color.a),
-//                                    blendColor(src.g, color.g, color.a), 
-//                                    blendColor(src.b, color.b, color.a),
-//                                    src.a
-//                                };
-//                            
-//                                this->setPixelAtOffset(offset, end);
-//                            }
-//                        }
-//                    }
-//                    
-//                    // Handle remaining pixels (less than 16)
-//                    for (; x1 < screenW; ++x1) {
-//                        p1 = rowPtr[x1 << 1];
-//                        p2 = rowPtr[(x1 << 1) + 1];
-//                        
-//                        setPixelBlendSrc(x + x1, baseY, {
-//                            expand4to8[p1 >> 4], expand4to8[p1 & 0x0F],
-//                            expand4to8[p2 >> 4], expand4to8[p2 & 0x0F]
-//                        });
-//                    }
-//                }
-//                
-//                ult::inPlotBarrier.arrive_and_wait();
-//            }
-            
 
             inline void processBMPChunk(const s32 x, const s32 y, const s32 screenW, const u8 *preprocessedData, 
                                            const s32 startRow, const s32 endRow, const u8 globalAlphaLimit) {
@@ -2916,15 +2838,6 @@ namespace tsl {
                 this->fillScreen(Color(0x0, 0x0, 0x0, 0x0)); // Fully transparent
             }
             
-            //struct Glyph {
-            //    stbtt_fontinfo *currFont;
-            //    float currFontSize;
-            //    int bounds[4];
-            //    int xAdvance;
-            //    u8 *glyphBmp;
-            //    int width, height;
-            //};
-
             const stbtt_fontinfo& getStandardFont() const {
                 return m_stdFont;
             }
@@ -3327,29 +3240,6 @@ namespace tsl {
                 return get();
             }
 
-            //inline void setLayerPosImpl(u32 x, u32 y) {
-            //    // Get the underscan pixel values for both horizontal and vertical borders
-            //    const auto [horizontalUnderscanPixels, verticalUnderscanPixels] = getUnderscanPixels();
-            //    //int horizontalUnderscanPixels = 0;
-            //    
-            //    //ult::useRightAlignment = (ult::parseValueFromIniSection(ult::ULTRAHAND_CONFIG_INI_PATH, ult::ULTRAHAND_PROJECT_NAME, "right_alignment") == ult::TRUE_STR);
-            //    //cfg::LayerPosX = 1280-32;
-            //    cfg::LayerPosX = 0;
-            //    cfg::LayerPosY = 0;
-            //    cfg::FramebufferWidth  = ult::DefaultFramebufferWidth;
-            //    cfg::FramebufferHeight = ult::DefaultFramebufferHeight;
-            //    
-            //    //ult::correctFrameSize = (cfg::FramebufferWidth == 448 && cfg::FramebufferHeight == 720); // for detecting the correct Overlay display size
-            //    if (ult::useRightAlignment && ult::correctFrameSize) {
-            //        cfg::LayerPosX = 1280-32 - horizontalUnderscanPixels;
-            //        ult::layerEdge = (1280-448);
-            //    }
-            //    
-            //    cfg::LayerPosX += x;
-            //    cfg::LayerPosY += y;
-            //    ASSERT_FATAL(viSetLayerPosition(&this->m_layer, cfg::LayerPosX, cfg::LayerPosY));
-            //}
-
             inline void setLayerPosImpl(u32 x, u32 y) {
                 // Get the underscan pixel values for both horizontal and vertical borders
                 //const auto [horizontalUnderscanPixels, verticalUnderscanPixels] = getUnderscanPixels();
@@ -3635,9 +3525,9 @@ namespace tsl {
              * @brief Adds the layer from screenshot and recording stacks
              */
             inline void addScreenshotStacks(bool forceDisable = true) {
-                ASSERT_FATAL(tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Screenshot));
-                ASSERT_FATAL(tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Recording));
-                screenshotsAreDisabled = false;
+                tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Screenshot);
+                tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Recording);
+                screenshotsAreDisabled.store(false, std::memory_order_release);
                 if (forceDisable)
                     screenshotsAreForceDisabled.store(false, std::memory_order_release);
             }
@@ -3646,9 +3536,9 @@ namespace tsl {
              * @brief Removes the layer from screenshot and recording stacks
              */
             inline void removeScreenshotStacks(bool forceDisable = true) {
-                ASSERT_FATAL(tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Screenshot));
-                ASSERT_FATAL(tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Recording));
-                screenshotsAreDisabled = true;
+                tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Screenshot);
+                tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Recording);
+                screenshotsAreDisabled.store(true, std::memory_order_release);
                 if (forceDisable)
                     screenshotsAreForceDisabled.store(true, std::memory_order_release);
             }
@@ -3765,46 +3655,9 @@ namespace tsl {
                     }
                 }
                 
-                // Replace divisions and modulos with bit operations - EXACT same logic
-                //return ((((y & 127) >> 4) + ((x >> 5) << 3) + ((y >> 7) * 112)) << 9) +  // *512 = <<9
-                //       (((y & 15) >> 3) << 8) +     // ((y % 16) / 8) * 256
-                //       (((x & 31) >> 4) << 7) +     // ((x % 32) / 16) * 128
-                //       (((y & 7) >> 1) << 5) +      // ((y % 8) / 2) * 32
-                //       (((x & 15) >> 3) << 4) +     // ((x % 16) / 8) * 16
-                //       ((y & 1) << 3) +             // (y % 2) * 8
-                //       (x & 7);                     // x % 8
-
-                //return ((((y & 127) >> 4) + ((x >> 5) << 3) + ((y >> 7) * (((cfg::FramebufferWidth / 2) >> 4) << 3))) << 9) +  // *512 = <<9
-                //       (((y & 15) >> 3) << 8) +     // ((y % 16) / 8) * 256
-                //       (((x & 31) >> 4) << 7) +     // ((x % 32) / 16) * 128
-                //       (((y & 7) >> 1) << 5) +      // ((y % 8) / 2) * 32
-                //       (((x & 15) >> 3) << 4) +     // ((x % 16) / 8) * 16
-                //       ((y & 1) << 3) +             // (y % 2) * 8
-                //       (x & 7);                     // x % 8
-
-                //return ((((y & 127) >> 4) + ((x >> 5) << 3) + ((y >> 7) * offsetWidthVar)) << 9) +  // *512 = <<9
-                //       (((y & 15) >> 3) << 8) +     // ((y % 16) / 8) * 256
-                //       (((x & 31) >> 4) << 7) +     // ((x % 32) / 16) * 128
-                //       (((y & 7) >> 1) << 5) +      // ((y % 8) / 2) * 32
-                //       (((x & 15) >> 3) << 4) +     // ((x % 16) / 8) * 16
-                //       ((y & 1) << 3) +             // (y % 2) * 8
-                //       (x & 7);                     // x % 8
-
                 return ((((y & 127) >> 4) + ((x >> 5) << 3) + ((y >> 7) * offsetWidthVar)) << 9) +
                        ((y & 8) << 5) + ((x & 16) << 3) + ((y & 6) << 4) + 
                        ((x & 8) << 1) + ((y & 1) << 3) + (x & 7);
-
-                //const u32 y_hi = y >> 7;
-                //const u32 y_mid = (y >> 4) & 7;    // bits 4-6 of y
-                //const u32 y_lo = y & 15;           // bits 0-3 of y
-                //
-                //const u32 x_hi = x >> 5;           // bits 5+ of x  
-                //const u32 x_lo = x & 31;          // bits 0-4 of x
-                //
-                //return ((y_mid + (x_hi << 3) + (y_hi * offsetWidthVar)) << 9) +
-                //       ((y_lo >> 3) << 8) + ((x_lo >> 4) << 7) + 
-                //       (((y_lo & 7) >> 1) << 5) + (((x_lo & 15) >> 3) << 4) +
-                //       ((y_lo & 1) << 3) + (x_lo & 7);
             }
 
             
@@ -3923,7 +3776,7 @@ namespace tsl {
              * @return Result
              */
             Result initFonts() {
-                static PlFontData stdFontData, localFontData, extFontData;
+                PlFontData stdFontData, localFontData, extFontData;
                 
                 // Nintendo's default font
                 TSL_R_TRY(plGetSharedFontByType(&stdFontData, PlSharedFontType_Standard));
@@ -4210,6 +4063,10 @@ namespace tsl {
                 this->m_highlightShaking = true;
                 this->m_highlightShakingDirection = direction;
                 this->m_highlightShakingStartTime = armTicksToNs(armGetSystemTick()); // Changed
+                if (direction != FocusDirection::None && m_isItem) {
+                    triggerRumbleClick.store(true, std::memory_order_release);
+                    triggerWallSound.store(true, std::memory_order_release);
+                }
             }
             
             /**
@@ -4433,14 +4290,6 @@ namespace tsl {
             
                     #if IS_LAUNCHER_DIRECTIVE
                     // Determine the active percentage to use
-                    //float activePercentage = 0.0f;
-                    //if (ult::downloadPercentage > 0) {
-                    //    activePercentage = ult::downloadPercentage;
-                    //} else if (ult::unzipPercentage > 0) {
-                    //    activePercentage = ult::unzipPercentage;
-                    //} else if (ult::copyPercentage > 0) {
-                    //    activePercentage = ult::copyPercentage;
-                    //}
                     const float activePercentage = ult::displayPercentage.load(std::memory_order_acquire);
                     if (activePercentage > 0){
                         if (ult::expandedMemory)
@@ -4600,38 +4449,6 @@ namespace tsl {
             std::function<bool(u64 keys)> m_clickListener = [](u64) { return false; };
         };
 
-        //static std::vector<Element*> m_lastFrameItems; // for smooth handling of jumpToItem navigation
-        //static bool m_hasValidFrame = false;
-        //static float m_lastFrameOffset = 0.0f;
-        // Static cache with instance validation
-        
-    //#if IS_STATUS_MONITOR_DIRECTIVE
-    //    /**
-    //     * @brief A Element that exposes the renderer directly to draw custom views easily
-    //     */
-    //    class CustomDrawer : public Element {
-    //        public:
-    //            /**
-    //             * @brief Constructor
-    //             * @note This element should only be used to draw static things the user cannot interact with e.g info text, images, etc.
-    //             * 
-    //             * @param renderFunc Callback that will be called once every frame to draw this view
-    //             */
-    //            CustomDrawer(std::function<void(gfx::Renderer*, u16 x, u16 y, u16 w, u16 h)> renderFunc) : Element(), m_renderFunc(renderFunc) {}
-    //            virtual ~CustomDrawer() {
-    //                m_isTable = true;
-    //            }
-    //            
-    //            virtual void draw(gfx::Renderer* renderer) override {
-    //                this->m_renderFunc(renderer, this->getX(), this->getY(), this->getWidth(), this->getHeight());
-    //            }
-    //            
-    //            virtual void layout(u16 parentX, u16 parentY, u16 parentWidth, u16 parentHeight) override {}
-    //            
-    //        private:
-    //            std::function<void(gfx::Renderer*, u16 x, u16 y, u16 w, u16 h)> m_renderFunc;
-    //    };
-    //#else
         /**
          * @brief A Element that exposes the renderer directly to draw custom views easily
          */
@@ -4797,7 +4614,30 @@ namespace tsl {
         }
 
         #endif
-                
+
+        struct TopCache {
+            std::string title;
+            std::string subtitle;
+            tsl::Color titleColor{0xF, 0xF, 0xF, 0xF}; // white by default
+            bool widgetDrawn = false;
+            bool useDynamicLogo = false;
+            bool disabled = false;
+        };
+        
+        struct BottomCache {
+            std::string bottomText;
+            float backWidth = 0.0f;
+            float selectWidth = 0.0f;
+            float nextPageWidth = 0.0f;
+            bool disabled = false;
+        };
+        
+        // Global or namespace-level variable
+        inline TopCache g_cachedTop;
+        inline BottomCache g_cachedBottom;
+
+        inline std::atomic<bool> g_disableMenuCacheOnReturn = false;
+
         /**
          * @brief The base frame which can contain another view
          *
@@ -4821,12 +4661,8 @@ namespace tsl {
             std::string m_pageLeftName; // CUSTOM MODIFICATION
             std::string m_pageRightName; // CUSTOM MODIFICATION
             
-        
+            
             tsl::Color titleColor = {0xF,0xF,0xF,0xF};
-            //static constexpr double cycleDuration = 1.6;
-            //float counter = 0;
-            //float countOffset;
-            //float progress;
             float letterWidth;
         #endif
 
@@ -4848,10 +4684,17 @@ namespace tsl {
                     ult::activeHeaderHeight = 97;
                     ult::loadWallpaperFileWhenSafe();
                     m_isItem = false;
+                    disableSound.store(false, std::memory_order_release);
                 }
         
             ~OverlayFrame() {
                 delete m_contentElement;
+                
+                // Check if returning from a list that disabled caching
+                if (g_disableMenuCacheOnReturn.exchange(false, std::memory_order_acq_rel)) {
+                    g_cachedTop.disabled = true;
+                    g_cachedBottom.disabled = true;
+                }
             }
         
         #if USING_FPS_INDICATOR_DIRECTIVE
@@ -4875,12 +4718,11 @@ namespace tsl {
             
             // CUSTOM SECTION START
             void draw(gfx::Renderer *renderer) override {
-                if (!ult::themeIsInitialized.load(std::memory_order_acquire)) {
-                    ult::themeIsInitialized.store(true, std::memory_order_release);
+                if (!ult::themeIsInitialized.exchange(true, std::memory_order_acq_rel)) {
                     tsl::initializeThemeVars();
                 }
                 
-                
+            
                 renderer->fillScreen(a(defaultBackgroundColor));
                 renderer->drawWallpaper();
                 
@@ -4889,21 +4731,41 @@ namespace tsl {
                 
             #if IS_LAUNCHER_DIRECTIVE
                 // Current interpreter state (atomic<bool>)
-                const bool interpreterIsRunningNow = ult::runningInterpreter.load(std::memory_order_acquire) && (ult::downloadPercentage.load(std::memory_order_acquire) != -1 || ult::unzipPercentage.load(std::memory_order_acquire) != -1 || ult::copyPercentage.load(std::memory_order_acquire) != -1) ;
+                const bool interpreterIsRunningNow = ult::runningInterpreter.load(std::memory_order_acquire) && (ult::downloadPercentage.load(std::memory_order_acquire) != -1 || ult::unzipPercentage.load(std::memory_order_acquire) != -1 || ult::copyPercentage.load(std::memory_order_acquire) != -1);
                 
-
                 if (m_noClickableItems != ult::noClickableItems.load(std::memory_order_acquire)) {
                     ult::noClickableItems.store(m_noClickableItems, std::memory_order_release);
                 }
-
+            
                 const bool isUltrahandMenu = (m_title == ult::CAPITAL_ULTRAHAND_PROJECT_NAME && 
                                         m_subtitle.find("Ultrahand Package") == std::string::npos && 
                                         m_subtitle.find("Ultrahand Script") == std::string::npos);
                 
-                if (isUltrahandMenu) {
-                #if USING_WIDGET_DIRECTIVE
-                    renderer->drawWidget();
-                #endif
+                // Determine if we should use cached data (first frame of new overlay)
+                const bool useCachedTop = !g_cachedTop.disabled && 
+                                          !g_cachedTop.title.empty() && 
+                                          (g_cachedTop.title != m_title || g_cachedTop.subtitle != m_subtitle);
+                
+                // Use cached or current data for rendering
+                const std::string& renderTitle = useCachedTop ? g_cachedTop.title : m_title;
+                const std::string& renderSubtitle = useCachedTop ? g_cachedTop.subtitle : m_subtitle;
+                const tsl::Color& renderTitleColor = useCachedTop ? g_cachedTop.titleColor : titleColor;
+                const bool renderUseDynamicLogo = useCachedTop ? g_cachedTop.useDynamicLogo : ult::useDynamicLogo;
+                
+                const bool renderIsUltrahandMenu = (renderTitle == ult::CAPITAL_ULTRAHAND_PROJECT_NAME && 
+                                                     renderSubtitle.find("Ultrahand Package") == std::string::npos && 
+                                                     renderSubtitle.find("Ultrahand Script") == std::string::npos);
+                
+                if (renderIsUltrahandMenu) {
+            #if USING_WIDGET_DIRECTIVE
+                    if (useCachedTop) {
+                        if (g_cachedTop.widgetDrawn) {
+                            renderer->drawWidget();
+                        }
+                    } else {
+                        renderer->drawWidget();
+                    }
+            #endif
             
                     if (ult::touchingMenu.load(std::memory_order_acquire) && ult::inMainMenu.load(std::memory_order_acquire)) {
                         renderer->drawRoundedRect(0.0f + 7, 12.0f, 245.0f - 13, 73.0f, 10.0f, a(clickColor));
@@ -4912,9 +4774,8 @@ namespace tsl {
                     x = 20;
                     fontSize = 42;
                     offset = 6;
-                    //countOffset = 0;
-                                                                                                                                    
-                    if (ult::useDynamicLogo) {
+                    
+                    if (renderUseDynamicLogo) {
                         x = drawDynamicUltraText(renderer, x, y + offset, fontSize, logoColor1, false);
                     } else {
                         for (const char letter : ult::SPLIT_PROJECT_NAME_1) {
@@ -4922,147 +4783,180 @@ namespace tsl {
                             x += renderer->drawString(letterStr, false, x, y + offset, fontSize, logoColor1).first;
                         }
                     }
-                                                                                                    
+                    
                     renderer->drawString(ult::SPLIT_PROJECT_NAME_2, false, x, y + offset, fontSize, (logoColor2));
                     
                 } else {
-                    if (m_showWidget)
-                        renderer->drawWidget();
-
+                    if (useCachedTop) {
+                        if (g_cachedTop.widgetDrawn) {
+                            renderer->drawWidget();
+                        }
+                    } else {
+                        if (m_showWidget) {
+                            renderer->drawWidget();
+                        }
+                    }
+            
                     x = 20;
-                    y = 52 -2;
+                    y = 52 - 2;
                     fontSize = 32;
             
-                    if (m_subtitle.find("Ultrahand Script") != std::string::npos) {
-                        renderer->drawString(m_title, false, x, y, fontSize, (defaultScriptColor));
+                    if (renderSubtitle.find("Ultrahand Script") != std::string::npos) {
+                        renderer->drawString(renderTitle, false, x, y, fontSize, (defaultScriptColor));
                     } else {
-                        titleColor = defaultPackageColor; // Default to green
+                        tsl::Color drawColor = defaultPackageColor; // Default to green
                         
-                        // Ultra-fast color selection using first character optimization
-                        if (!m_colorSelection.empty()) {
-                            const char firstChar = m_colorSelection[0];
-                            const size_t len = m_colorSelection.length();
-                            
-                            // Fast path: check first char + length for unique combinations
-                            switch (firstChar) {
-                                case 'g': // green
-                                    if (len == 5 && m_colorSelection == "green") {
-                                        titleColor = {0x0, 0xF, 0x0, 0xF};
-                                    }
-                                    break;
-                                case 'r': // red
-                                    if (len == 3 && m_colorSelection == "red") {
-                                        titleColor = RGB888("#F7253E");
-                                    }
-                                    break;
-                                case 'b': // blue
-                                    if (len == 4 && m_colorSelection == "blue") {
-                                        titleColor = {0x7, 0x7, 0xF, 0xF};
-                                    }
-                                    break;
-                                case 'y': // yellow
-                                    if (len == 6 && m_colorSelection == "yellow") {
-                                        titleColor = {0xF, 0xF, 0x0, 0xF};
-                                    }
-                                    break;
-                                case 'o': // orange
-                                    if (len == 6 && m_colorSelection == "orange") {
-                                        titleColor = {0xFF, 0xA5, 0x00, 0xFF};
-                                    }
-                                    break;
-                                case 'p': // pink or purple
-                                    if (len == 4 && m_colorSelection == "pink") {
-                                        titleColor = {0xFF, 0x69, 0xB4, 0xFF};
-                                    } else if (len == 6 && m_colorSelection == "purple") {
-                                        titleColor = {0x80, 0x00, 0x80, 0xFF};
-                                    }
-                                    break;
-                                case 'w': // white
-                                    if (len == 5 && m_colorSelection == "white") {
-                                        titleColor = {0xF, 0xF, 0xF, 0xF};
-                                    }
-                                    break;
-                                //case 'u': // ultra
-                                //    if (len == 5 && m_colorSelection == "ultra") {
-                                //        for (const char letter : m_title) {
-                                //            progress = ult::calculateAmplitude(counter - x * 0.0001F);
-                                //            
-                                //            const tsl::Color highlightColor = {
-                                //                static_cast<u8>((0xA - 0xF) * (3 - 1.5 * progress) + 0xF),
-                                //                static_cast<u8>((0xA - 0xF) * 1.5 * progress + 0xF),
-                                //                static_cast<u8>((0xA - 0xF) * (1.25 - progress) + 0xF),
-                                //                0xF
-                                //            };
-                                //            
-                                //            const std::string letterStr(1, letter);
-                                //            renderer->drawString(letterStr.c_str(), false, x, y, fontSize, (highlightColor));
-                                //            const auto letterWidth = renderer->getTextDimensions(letterStr, false, fontSize).first;
-                                //            x += letterWidth;
-                                //            counter -= 0.00004F;
-                                //        }
-                                //        goto skip_normal_draw;
-                                //    }
-                                //    break;
-                                case '#': // hex color
-                                    if (len == 7 && ult::isValidHexColor(m_colorSelection.substr(1))) {
-                                        titleColor = RGB888(m_colorSelection.substr(1));
-                                    }
-                                    break;
+                        if (!useCachedTop) {
+                            // Calculate color only if not using cache
+                            if (!m_colorSelection.empty()) {
+                                const char firstChar = m_colorSelection[0];
+                                const size_t len = m_colorSelection.length();
+                                
+                                // Fast path: check first char + length for unique combinations
+                                switch (firstChar) {
+                                    case 'g': // green
+                                        if (len == 5 && m_colorSelection.compare("green") == 0) {
+                                            drawColor = {0x0, 0xF, 0x0, 0xF};
+                                        }
+                                        break;
+                                    case 'r': // red
+                                        if (len == 3 && m_colorSelection.compare("red") == 0) {
+                                            drawColor = RGB888("#F7253E");
+                                        }
+                                        break;
+                                    case 'b': // blue
+                                        if (len == 4 && m_colorSelection.compare("blue") == 0) {
+                                            drawColor = {0x7, 0x7, 0xF, 0xF};
+                                        }
+                                        break;
+                                    case 'y': // yellow
+                                        if (len == 6 && m_colorSelection.compare("yellow") == 0) {
+                                            drawColor = {0xF, 0xF, 0x0, 0xF};
+                                        }
+                                        break;
+                                    case 'o': // orange
+                                        if (len == 6 && m_colorSelection.compare("orange") == 0) {
+                                            drawColor = {0xFF, 0xA5, 0x00, 0xFF};
+                                        }
+                                        break;
+                                    case 'p': // pink or purple
+                                        if (len == 4 && m_colorSelection.compare("pink") == 0) {
+                                            drawColor = {0xFF, 0x69, 0xB4, 0xFF};
+                                        } else if (len == 6 && m_colorSelection.compare("purple") == 0) {
+                                            drawColor = {0x80, 0x00, 0x80, 0xFF};
+                                        }
+                                        break;
+                                    case 'w': // white
+                                        if (len == 5 && m_colorSelection.compare("white") == 0) {
+                                            drawColor = {0xF, 0xF, 0xF, 0xF};
+                                        }
+                                        break;
+                                    case '#': // hex color
+                                        if (len == 7 && ult::isValidHexColor(m_colorSelection.substr(1))) {
+                                            drawColor = RGB888(m_colorSelection.substr(1));
+                                        }
+                                        break;
+                                }
                             }
+                            titleColor = drawColor;
+                        } else {
+                            drawColor = renderTitleColor;
                         }
                         
-                        renderer->drawString(m_title, false, x, y, fontSize, (titleColor));
+                        renderer->drawString(renderTitle, false, x, y, fontSize, (drawColor));
                         y += 2;
-                        //skip_normal_draw:;
                     }
                 }
+                
                 static const std::vector<std::string> specialChars2 = {""};
-                if (m_title == ult::CAPITAL_ULTRAHAND_PROJECT_NAME) {
+                if (renderTitle == ult::CAPITAL_ULTRAHAND_PROJECT_NAME) {
                     renderer->drawStringWithColoredSections(ult::versionLabel, false, specialChars2, 20, y+25, 15, (bannerVersionTextColor), textSeparatorColor);
                 } else {
-                    std::string subtitle = m_subtitle;
+                    std::string subtitle = renderSubtitle;
                     const size_t pos = subtitle.find("?Ultrahand Script");
                     if (pos != std::string::npos) {
                         subtitle.erase(pos, 17); // "?Ultrahand Script".length() = 17
                     }
                     renderer->drawStringWithColoredSections(subtitle, false, specialChars2, 20, y+23, 15, (bannerVersionTextColor), textSeparatorColor);
                 }
+                
+                // Update top cache after rendering for next frame
+                g_cachedTop.title = m_title;
+                g_cachedTop.subtitle = m_subtitle;
+                g_cachedTop.titleColor = titleColor;
+                g_cachedTop.useDynamicLogo = ult::useDynamicLogo;
+                // Store whether widget was ACTUALLY drawn this frame
+                if (isUltrahandMenu) {
+                    g_cachedTop.widgetDrawn = true;  // Ultrahand menu always shows widget
+                } else {
+                    g_cachedTop.widgetDrawn = m_showWidget;  // Other menus use m_showWidget
+                }
+                g_cachedTop.disabled = false;
             
             #else
+                // NON-LAUNCHER PATH WITH CACHE SUPPORT
                 if (m_noClickableItems != ult::noClickableItems.load(std::memory_order_acquire)) {
                     ult::noClickableItems.store(m_noClickableItems, std::memory_order_release);
                 }
-                #if USING_WIDGET_DIRECTIVE
-                if (m_showWidget)
-                    renderer->drawWidget();
-                #endif
                 
-                renderer->drawString(m_title, false, 20, 52-2, 32, (defaultOverlayColor));
-                renderer->drawString(m_subtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
+                // Determine if we should use cached data (first frame of new overlay)
+                const bool useCachedTop = !g_cachedTop.disabled && 
+                                          !g_cachedTop.title.empty() && 
+                                          (g_cachedTop.title != m_title || g_cachedTop.subtitle != m_subtitle);
+                
+                // Use cached or current data for rendering
+                const std::string& renderTitle = useCachedTop ? g_cachedTop.title : m_title;
+                const std::string& renderSubtitle = useCachedTop ? g_cachedTop.subtitle : m_subtitle;
+                
+            #if USING_WIDGET_DIRECTIVE
+                if (useCachedTop) {
+                    if (g_cachedTop.widgetDrawn) {
+                        renderer->drawWidget();
+                    }
+                } else {
+                    if (m_showWidget)
+                        renderer->drawWidget();
+                }
+            #endif
+                
+                renderer->drawString(renderTitle, false, 20, 52-2, 32, (defaultOverlayColor));
+                renderer->drawString(renderSubtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
+                
+                // Update top cache after rendering for next frame
+                g_cachedTop.title = m_title;
+                g_cachedTop.subtitle = m_subtitle;
+                g_cachedTop.titleColor = {0xF, 0xF, 0xF, 0xF};
+            #if USING_WIDGET_DIRECTIVE
+                g_cachedTop.widgetDrawn = m_showWidget;
+            #else
+                g_cachedTop.widgetDrawn = false;
+            #endif
+                g_cachedTop.useDynamicLogo = false;
+                g_cachedTop.disabled = false;
             #endif
             
                 renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(bottomSeparatorColor));
-
+            
                 // Compute gap width once from GAP_1 and derive halfGap
                 const float gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
                 
                 // Calculate text widths for buttons depending on launch mode and interpreter state
-                #if IS_LAUNCHER_DIRECTIVE
-                    const float backTextWidth = renderer->getTextDimensions(
-                        "\uE0E1" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::BACK : ult::HIDE), false, 23).first;
-                    const float selectTextWidth = renderer->getTextDimensions(
-                        "\uE0E0" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::OK : ult::CANCEL), false, 23).first;
-                #else
-                    const float backTextWidth = renderer->getTextDimensions(
-                        "\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
-                    const float selectTextWidth = renderer->getTextDimensions(
-                        "\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
-                #endif
+            #if IS_LAUNCHER_DIRECTIVE
+                const float backTextWidth = renderer->getTextDimensions(
+                    "\uE0E1" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::BACK : ult::HIDE), false, 23).first;
+                const float selectTextWidth = renderer->getTextDimensions(
+                    "\uE0E0" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::OK : ult::CANCEL), false, 23).first;
+            #else
+                const float backTextWidth = renderer->getTextDimensions(
+                    "\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
+                const float selectTextWidth = renderer->getTextDimensions(
+                    "\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
+            #endif
                 
                 const float _halfGap = gapWidth / 2.0f;
                 if (_halfGap != ult::halfGap.load(std::memory_order_acquire))
                     ult::halfGap.store(_halfGap, std::memory_order_release);
-
+            
                 // Total button widths include half-gap padding on both sides
                 const float _backWidth = backTextWidth + gapWidth;
                 if (_backWidth != ult::backWidth.load(std::memory_order_acquire))
@@ -5086,7 +4980,7 @@ namespace tsl {
                                               _selectWidth-2, 73.0f, 10.0f, a(clickColor));
                 }
                 
-                #if IS_LAUNCHER_DIRECTIVE
+            #if IS_LAUNCHER_DIRECTIVE
                 // Handle optional next page button when in launcher mode and appropriate conditions are met
                 if (!interpreterIsRunningNow && (ult::inMainMenu.load(std::memory_order_acquire) ||
                                                  !m_pageLeftName.empty() || !m_pageRightName.empty())) {
@@ -5095,14 +4989,14 @@ namespace tsl {
                             !m_pageLeftName.empty() ? ("\uE0ED" + ult::GAP_2 + m_pageLeftName) :
                             !m_pageRightName.empty() ? ("\uE0EE" + ult::GAP_2 + m_pageRightName) :
                             (ult::inMainMenu.load(std::memory_order_acquire) ?
-                                ((m_menuMode == "packages" ?
+                                (((m_menuMode.compare("packages") == 0) ?
                                     (ult::usePageSwap ? "\uE0EE" : "\uE0ED") :
                                     (ult::usePageSwap ? "\uE0ED" : "\uE0EE")) +
                                 ult::GAP_2 + (ult::inOverlaysPage.load(std::memory_order_acquire) ?
                                     ult::PACKAGES : ult::OVERLAYS_ABBR)) :
                                 ""),
                             false, 23).first + gapWidth;
-
+            
                     if (_nextPageWidth != ult::nextPageWidth.load(std::memory_order_acquire))
                         ult::nextPageWidth.store(_nextPageWidth, std::memory_order_release);
                 
@@ -5117,12 +5011,10 @@ namespace tsl {
                                                   73.0f, 10.0f, a(clickColor));
                     }
                 }
-                #endif
+            #endif
                 
-
-                #if IS_LAUNCHER_DIRECTIVE
-
-                const std::string menuBottomLine =
+            #if IS_LAUNCHER_DIRECTIVE
+                std::string currentBottomLine =
                     "\uE0E1" + ult::GAP_2 +
                     (interpreterIsRunningNow ? ult::HIDE : ult::BACK) + ult::GAP_1 +
                     (!m_noClickableItems && !interpreterIsRunningNow
@@ -5133,14 +5025,14 @@ namespace tsl {
                         : "") +
                     (!interpreterIsRunningNow
                         ? (!ult::usePageSwap
-                            ? (m_menuMode == "packages"
+                            ? ((m_menuMode.compare("packages") == 0)
                                 ? "\uE0ED" + ult::GAP_2 + ult::OVERLAYS_ABBR
-                                : m_menuMode == "overlays"
+                                : (m_menuMode.compare("overlays") == 0)
                                     ? "\uE0EE" + ult::GAP_2 + ult::PACKAGES
                                     : "")
-                            : (m_menuMode == "packages"
+                            : ((m_menuMode.compare("packages") == 0)
                                 ? "\uE0EE" + ult::GAP_2 + ult::OVERLAYS_ABBR
-                                : m_menuMode == "overlays"
+                                : (m_menuMode.compare("overlays") == 0)
                                     ? "\uE0ED" + ult::GAP_2 + ult::PACKAGES
                                     : ""))
                         : "") +
@@ -5149,20 +5041,38 @@ namespace tsl {
                         : !interpreterIsRunningNow && !m_pageRightName.empty()
                             ? "\uE0EE" + ult::GAP_2 + m_pageRightName
                             : "");
-                #else
-                const std::string menuBottomLine =
+            #else
+                std::string currentBottomLine =
                     "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 +
                     (!m_noClickableItems
                         ? "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1
                         : "");
-                #endif
+            #endif
+                
+                // Determine if we should use cached bottom text (first frame of new overlay)
+                const bool useCachedBottom = !g_cachedBottom.disabled && 
+                                              !g_cachedBottom.bottomText.empty() && 
+                                              g_cachedBottom.bottomText != currentBottomLine;
+                
+                const std::string& menuBottomLine = useCachedBottom ? g_cachedBottom.bottomText : currentBottomLine;
                 
                 // Render the text - it starts halfGap inside the first button, so edgePadding + halfGap
                 static const std::vector<std::string> specialChars = {"\uE0E1","\uE0E0","\uE0ED","\uE0EE","\uE0E5"};
                 renderer->drawStringWithColoredSections(menuBottomLine, false, specialChars, 
                                                         buttonStartX, 693, 23, 
                                                         (bottomTextColor), (buttonColor));
-
+                
+                // Update bottom cache after rendering for next frame
+                g_cachedBottom.bottomText = currentBottomLine;
+                g_cachedBottom.backWidth = _backWidth;
+                g_cachedBottom.selectWidth = _selectWidth;
+            #if IS_LAUNCHER_DIRECTIVE
+                g_cachedBottom.nextPageWidth = ult::nextPageWidth.load(std::memory_order_acquire);
+            #else
+                g_cachedBottom.nextPageWidth = 0.0f;
+            #endif
+                g_cachedBottom.disabled = false;
+            
             #if USING_FPS_INDICATOR_DIRECTIVE
                 // Update and display FPS
                 const u64 currentTime_ns = armTicksToNs(armGetSystemTick());
@@ -5183,11 +5093,12 @@ namespace tsl {
             
                 if (m_contentElement != nullptr)
                     m_contentElement->frame(renderer);
-
+            
                 if (!ult::useRightAlignment)
                     renderer->drawRect(447, 0, 448, 720, a(edgeSeparatorColor));
                 else
                     renderer->drawRect(0, 0, 1, 720, a(edgeSeparatorColor));
+            
             }
             // CUSTOM SECTION END
         
@@ -5277,8 +5188,8 @@ namespace tsl {
 
                 if (FullMode)
                     ult::loadWallpaperFileWhenSafe();
-                //else
-                //    svcSleepThread(250'000); // sleep thread for initial values to auto-load
+                else
+                    svcSleepThread(250'000); // sleep thread for initial values to auto-load
 
                 m_isItem = false;
             }
@@ -5286,6 +5197,12 @@ namespace tsl {
             virtual ~HeaderOverlayFrame() {
                 if (this->m_contentElement != nullptr)
                     delete this->m_contentElement;
+                
+                // Check if returning from a list that disabled caching
+                if (g_disableMenuCacheOnReturn.exchange(false, std::memory_order_acq_rel)) {
+                    g_cachedTop.disabled = true;
+                    g_cachedBottom.disabled = true;
+                }
             }
 
             
@@ -5302,7 +5219,7 @@ namespace tsl {
                 
                 if (FullMode == true) {
                     renderer->fillScreen(a(defaultBackgroundColor));
-                    if (lastMode.empty())
+                    if (lastMode.empty() || (lastMode.compare("returning") == 0))
                         renderer->drawWallpaper();
                 } else {
                     renderer->fillScreen({ 0x0, 0x0, 0x0, 0x0});
@@ -5311,8 +5228,17 @@ namespace tsl {
                 y = 50;
                 offset = 0;
                 
-                renderer->drawString(this->m_title, false, 20, 50, 32, (defaultOverlayColor));
-                renderer->drawString(this->m_subtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
+                // Determine if we should use cached data (first frame of new overlay)
+                const bool useCachedTop = !g_cachedTop.disabled && 
+                                          !g_cachedTop.title.empty() && 
+                                          (g_cachedTop.title != m_title || g_cachedTop.subtitle != m_subtitle);
+                
+                // Use cached or current data for rendering
+                const std::string& renderTitle = useCachedTop ? g_cachedTop.title : m_title;
+                const std::string& renderSubtitle = useCachedTop ? g_cachedTop.subtitle : m_subtitle;
+                
+                renderer->drawString(renderTitle, false, 20, 50, 32, (defaultOverlayColor));
+                renderer->drawString(renderSubtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
                 
                 if (FullMode == true)
                     renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(bottomSeparatorColor));
@@ -5322,24 +5248,24 @@ namespace tsl {
                 
                 if (FullMode && !deactivateOriginalFooter) {
                     // Get the exact gap width from ult::GAP_1
-                    static const auto gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
-                    static const float _halfGap = gapWidth / 2.0f;
+                    const auto gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
+                    const float _halfGap = gapWidth / 2.0f;
                     if (_halfGap != ult::halfGap.load(std::memory_order_acquire))
                         ult::halfGap.store(_halfGap, std::memory_order_release);
                 
                     // Calculate text dimensions for buttons without gaps
-                    static const auto backTextWidth = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
-                    static const auto selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
+                    const auto backTextWidth = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
+                    const auto selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
                 
                     // Update widths to include the half-gap padding on each side
-                    static const float _backWidth = backTextWidth + gapWidth;
+                    const float _backWidth = backTextWidth + gapWidth;
                     if (_backWidth != ult::backWidth.load(std::memory_order_acquire))
                         ult::backWidth.store(_backWidth, std::memory_order_release);
-                    static const float _selectWidth = selectTextWidth + gapWidth;
+                    const float _selectWidth = selectTextWidth + gapWidth;
                     if (_selectWidth != ult::selectWidth.load(std::memory_order_acquire))
                         ult::selectWidth.store(_selectWidth, std::memory_order_release);
                 
-                    static const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
+                    const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
                 
                     // Draw back button rectangle
                     if (ult::touchingBack.load(std::memory_order_acquire)) {
@@ -5353,17 +5279,25 @@ namespace tsl {
                     }
                 }
                 
+                // Build current bottom line
+                const std::string currentBottomLine = 
+                    "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 +
+                    (!m_noClickableItems 
+                        ? "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1
+                        : "");
+                
+                // Determine if we should use cached bottom text (first frame of new overlay)
+                const bool useCachedBottom = !g_cachedBottom.disabled && 
+                                              !g_cachedBottom.bottomText.empty() && 
+                                              g_cachedBottom.bottomText != currentBottomLine;
+                
+                const std::string& menuBottomLine = useCachedBottom ? g_cachedBottom.bottomText : currentBottomLine;
+                
                 // Render the text with special character handling
                 if (!deactivateOriginalFooter)  {
-                    const std::string menuBottomLine = 
-                        "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 +
-                        (!m_noClickableItems 
-                            ? "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1
-                            : "");
                     static const std::vector<std::string> specialChars = {"\uE0E1","\uE0E0","\uE0ED","\uE0EE","\uE0E5"};
                     renderer->drawStringWithColoredSections(menuBottomLine, false, specialChars, buttonStartX, 693, 23, (bottomTextColor), (buttonColor));
                 }
-                
                 
                 if (this->m_contentElement != nullptr)
                     this->m_contentElement->frame(renderer);
@@ -5374,6 +5308,21 @@ namespace tsl {
                     else
                         renderer->drawRect(0, 0, 1, 720, a(edgeSeparatorColor));
                 }
+                
+                // Update top cache after rendering for next frame
+                g_cachedTop.title = m_title;
+                g_cachedTop.subtitle = m_subtitle;
+                g_cachedTop.titleColor = {0xF, 0xF, 0xF, 0xF}; // HeaderOverlayFrame uses default white
+                g_cachedTop.widgetDrawn = false;  // HeaderOverlayFrame doesn't use widgets
+                g_cachedTop.useDynamicLogo = false; // HeaderOverlayFrame doesn't use dynamic logo
+                g_cachedTop.disabled = false;
+                
+                // Update bottom cache after rendering for next frame
+                g_cachedBottom.bottomText = currentBottomLine;
+                g_cachedBottom.backWidth = ult::backWidth.load(std::memory_order_acquire);
+                g_cachedBottom.selectWidth = ult::selectWidth.load(std::memory_order_acquire);
+                g_cachedBottom.nextPageWidth = 0.0f;  // HeaderOverlayFrame doesn't use next page
+                g_cachedBottom.disabled = false;
             }
             
 
@@ -5471,8 +5420,7 @@ namespace tsl {
             }
             
             virtual void draw(gfx::Renderer *renderer) override {
-                if (!ult::themeIsInitialized.load(std::memory_order_acquire)) {
-                    ult::themeIsInitialized.store(true, std::memory_order_release);
+                if (!ult::themeIsInitialized.exchange(true, std::memory_order_acq_rel)) {
                     tsl::initializeThemeVars();
                 }
             
@@ -5987,22 +5935,17 @@ namespace tsl {
                     return handleJumpToItem(oldFocus); // needs to be handled 2x for proper rendering
                 }
                 
-                if (jumpToBottom.load(std::memory_order_acquire)) {
-                    jumpToBottom.store(false, std::memory_order_release);
+                if (jumpToBottom.exchange(false, std::memory_order_acq_rel))
                     return handleJumpToBottom(oldFocus);
-                }
-                if (jumpToTop.load(std::memory_order_acquire)) {
-                    jumpToTop.store(false, std::memory_order_release);
+                
+                if (jumpToTop.exchange(false, std::memory_order_acq_rel))
                     return handleJumpToTop(oldFocus);
-                }
-                if (skipDown.load(std::memory_order_acquire)) {
-                    skipDown.store(false, std::memory_order_release);
+                
+                if (skipDown.exchange(false, std::memory_order_acq_rel))
                     return handleSkipDown(oldFocus);
-                }
-                if (skipUp.load(std::memory_order_acquire)) {
-                    skipUp.store(false, std::memory_order_release);
+                
+                if (skipUp.exchange(false, std::memory_order_acq_rel))
                     return handleSkipUp(oldFocus);
-                }
 
             
                 if (direction == FocusDirection::None) {
@@ -6019,11 +5962,7 @@ namespace tsl {
             }
 
             inline void jumpToItem(const std::string& text = "", const std::string& value = "", bool exactMatch=true) {
-                //if (!text.empty() || !value.empty())
-                //    m_pendingJump = true;
-                //else
-                //    m_pendingJump = false;
-                //if (g_overlayFilename == "ovlmenu.ovl") return;
+
                 if (!text.empty() || !value.empty()) {
                     m_pendingJump = true;
                     m_jumpToText = text;
@@ -6064,6 +6003,8 @@ namespace tsl {
 
             inline void disableCaching() {
                 m_cachingDisabled = true;
+                //clearFrameCache();
+                g_disableMenuCacheOnReturn.store(true, std::memory_order_release);
             }
         
         protected:
@@ -6133,23 +6074,6 @@ namespace tsl {
             NavigationResult m_lastNavigationResult = NavigationResult::None;
         
         private:
-            // Method to explicitly preserve cache when navigating away
-            //void preserveCacheForReturn() {
-            //    if (m_instanceId == s_cachedInstanceId && s_hasValidFrame) {
-            //        // Cache is already preserved for this instance
-            //        return;
-            //    }
-            //    cacheCurrentFrame();
-            //}
-        
-            // Method to check if this instance has a valid cached frame
-            //bool hasCachedFrame() const {
-            //    return s_hasValidFrame && s_cachedInstanceId == m_instanceId;
-            //}
-
-            //static size_t generateInstanceId() {
-            //    return s_nextInstanceId++;
-            //}
 
             // Thread-safe versions (handle their own locking)
             static void clearStaticCache(bool preservePointers = false) {
@@ -6272,11 +6196,6 @@ namespace tsl {
             
 
             void clearItems() {
-                //std::lock_guard<std::mutex> lock(s_lastFrameItemsMutex);
-                // Clear static cache if it belongs to this instance
-                //if (s_cachedInstanceId == m_instanceId) {
-                //    clearStaticCache();
-                //}
 
                 for (Element* item : m_items) delete item;
                 m_items = {};
@@ -6432,11 +6351,7 @@ namespace tsl {
                         const float viewBottom = m_offset + getHeight();
                         
                         if (itemTop < m_offset || itemBottom > viewBottom) {
-                            float emergencySpeed = 0.6f;
-                            
-                            if (itemBottom < m_offset || itemTop > viewBottom) {
-                                emergencySpeed = 0.9f;
-                            }
+                            const float emergencySpeed = (itemBottom < m_offset || itemTop > viewBottom) ? 0.9f : 0.6f;
                             
                             m_offset += diff * emergencySpeed;
                             m_scrollVelocity = diff * 0.3f;
@@ -6499,10 +6414,10 @@ namespace tsl {
                         const float viewCenter = m_offset + (getHeight() / 2.0f);
                         float accumHeight = 0.0f;
                         
-                        float itemHeight, itemCenter;
+                        //float itemHeight, itemCenter;
                         for (size_t i = 0; i < m_items.size(); ++i) {
-                            itemHeight = m_items[i]->getHeight();
-                            itemCenter = accumHeight + (itemHeight / 2.0f);
+                            const float itemHeight = m_items[i]->getHeight();
+                            const float itemCenter = accumHeight + (itemHeight / 2.0f);
                             
                             if (itemCenter >= viewCenter) {
                                 m_focusedIndex = i;
@@ -6563,18 +6478,19 @@ namespace tsl {
                                                                                                                                             
             inline Element* handleDownFocus(Element* oldFocus) {
                 static bool triggerShakeOnce = true;
+                const bool atBottom = isAtBottom();
                 updateHoldState();
                 
                 // Check if the next item is non-focusable BEFORE we do anything else
                 if (m_focusedIndex + 1 < int(m_items.size())) {
                     Element* nextItem = m_items[m_focusedIndex + 1];
                     if (!nextItem->m_isItem) {
-                        isTableScrolling.store(true, std::memory_order_release);  // Set this IMMEDIATELY
+                        isTableScrolling.store(true, std::memory_order_release);
                     }
                 }
                 
                 // If holding and at boundary, try to scroll first
-                if (m_isHolding && m_stoppedAtBoundary && !isAtBottom()) {
+                if (m_isHolding && m_stoppedAtBoundary && !atBottom) {
                     scrollDown();
                     m_stoppedAtBoundary = false;
                     return oldFocus;
@@ -6585,68 +6501,77 @@ namespace tsl {
                 if (result != oldFocus) {
                     m_lastNavigationResult = NavigationResult::Success;
                     m_stoppedAtBoundary = false;
-                    triggerShakeOnce = true;
+                    triggerShakeOnce = true;  // This resets it for THIS function
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    triggerNavigationFeedback();
                     return result;
                 }
                 
                 // Check if we can still scroll down
-                if (!isAtBottom()) {
+                if (!atBottom) {
                     scrollDown();
+                    triggerShakeOnce = true;  // ADDED: Reset when scrolling away from boundary
                     return oldFocus;
                 }
                 
-                // At absolute bottom - check for wrapping
-                if (!m_isHolding && !m_hasWrappedInCurrentSequence && isAtBottom()) {
-                    //if (s_directionalKeyReleased.load(std::memory_order_acquire)) {
-                    //    s_directionalKeyReleased.store(false, std::memory_order_release);
-                    //    m_hasWrappedInCurrentSequence = true;
-                    //    m_lastNavigationResult = NavigationResult::Wrapped;
-                    //    triggerShakeOnce = true;  // Reset when wrapping
-                    //    return handleJumpToTop(oldFocus);
-                    //} else
-                    //    s_directionalKeyReleased.store(false, std::memory_order_release);
-
+                // At absolute bottom - check for wrapping (single tap)
+                if (!m_isHolding && !m_hasWrappedInCurrentSequence && atBottom) {
                     s_directionalKeyReleased.store(false, std::memory_order_release);
                     m_hasWrappedInCurrentSequence = true;
                     m_lastNavigationResult = NavigationResult::Wrapped;
+                    
+                    //if (result->m_isItem) {
                     triggerShakeOnce = true;  // Reset when wrapping
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    //}
                     return handleJumpToTop(oldFocus);
                 }
                 
-                // Set boundary flag
-                if (m_isHolding) {
+                // Set boundary flag (for holding)
+                if (m_isHolding && atBottom) {
                     m_stoppedAtBoundary = true;
                     if (triggerShakeOnce) {
-                        // Find the last focusable item to shake
-                        for (ssize_t i = static_cast<ssize_t>(m_focusedIndex); i >= 0; --i) {
-                            if (m_items[i]->m_isItem) {
-                                m_items[i]->shakeHighlight(FocusDirection::Down);
-                                break;
+                        if (result->m_isItem) {
+                            triggerRumbleClick.store(true, std::memory_order_release);
+                            triggerWallSound.store(true, std::memory_order_release);
+                            
+                            for (ssize_t i = static_cast<ssize_t>(m_focusedIndex); i >= 0; --i) {
+                                if (m_items[i]->m_isItem) {
+                                    m_items[i]->shakeHighlight(FocusDirection::Down);
+                                    break;
+                                }
                             }
+                        } else {
+                            triggerRumbleClick.store(true, std::memory_order_release);
+                            triggerWallSound.store(true, std::memory_order_release);
                         }
                         triggerShakeOnce = false;
                     }
-                } else
+                } else if (!m_isHolding) {
                     triggerShakeOnce = true;
-                
+                }
+            
                 m_lastNavigationResult = NavigationResult::HitBoundary;
                 return oldFocus;
             }
             
             inline Element* handleUpFocus(Element* oldFocus) {
                 static bool triggerShakeOnce = true;
+                const bool atTop = isAtTop();
                 updateHoldState();
                 
                 // Check if the previous item is non-focusable BEFORE we do anything else
                 if (m_focusedIndex > 0) {
                     Element* prevItem = m_items[m_focusedIndex - 1];
                     if (prevItem->isTable()) {
-                        isTableScrolling.store(true, std::memory_order_release);  // Set this IMMEDIATELY
+                        isTableScrolling.store(true, std::memory_order_release);
                     }
                 }
                 
                 // If holding and at boundary, try to scroll first
-                if (m_isHolding && m_stoppedAtBoundary && !isAtTop()) {
+                if (m_isHolding && m_stoppedAtBoundary && !atTop) {
                     scrollUp();
                     m_stoppedAtBoundary = false;
                     return oldFocus;
@@ -6657,54 +6582,62 @@ namespace tsl {
                 if (result != oldFocus) {
                     m_lastNavigationResult = NavigationResult::Success;
                     m_stoppedAtBoundary = false;
-                    triggerShakeOnce = true;
+                    triggerShakeOnce = true;  // This resets it for THIS function
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    triggerNavigationFeedback();
                     return result;
                 }
                 
                 // Check if we can still scroll up
-                if (!isAtTop()) {
+                if (!atTop) {
                     scrollUp();
+                    triggerShakeOnce = true;  // ADDED: Reset when scrolling away from boundary
                     return oldFocus;
                 }
                 
-                // At absolute top - check for wrapping
-                if (!m_isHolding && !m_hasWrappedInCurrentSequence && isAtTop()) {
-                    //if (s_directionalKeyReleased.load(std::memory_order_acquire)) {
-                    //    s_directionalKeyReleased.store(false, std::memory_order_release);
-                    //    m_hasWrappedInCurrentSequence = true;
-                    //    m_lastNavigationResult = NavigationResult::Wrapped;
-                    //    triggerShakeOnce = true;  // Reset when wrapping
-                    //    return handleJumpToBottom(oldFocus);
-                    //} else
-                    //    s_directionalKeyReleased.store(false, std::memory_order_release);
-
+                // At absolute top - check for wrapping (single tap)
+                if (!m_isHolding && !m_hasWrappedInCurrentSequence && atTop) {
                     s_directionalKeyReleased.store(false, std::memory_order_release);
                     m_hasWrappedInCurrentSequence = true;
                     m_lastNavigationResult = NavigationResult::Wrapped;
+                    
+                    //if (result->m_isItem) {
                     triggerShakeOnce = true;  // Reset when wrapping
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    //}
                     return handleJumpToBottom(oldFocus);
                 }
                 
-                // Set boundary flag
-                if (m_isHolding) {
+                // Set boundary flag (for holding)
+                if (m_isHolding && atTop) {
                     m_stoppedAtBoundary = true;
                     if (triggerShakeOnce) {
-                        // Find the first focusable item to shake
-                        for (size_t i = m_focusedIndex; i < m_items.size(); ++i) {
-                            if (m_items[i]->m_isItem) {
-                                m_items[i]->shakeHighlight(FocusDirection::Up);
-                                break;
+                        if (result->m_isItem) {
+                            triggerRumbleClick.store(true, std::memory_order_release);
+                            triggerWallSound.store(true, std::memory_order_release);
+                            
+                            for (size_t i = m_focusedIndex; i < m_items.size(); ++i) {
+                                if (m_items[i]->m_isItem) {
+                                    m_items[i]->shakeHighlight(FocusDirection::Up);
+                                    break;
+                                }
                             }
+                        } else {
+                            triggerRumbleClick.store(true, std::memory_order_release);
+                            triggerWallSound.store(true, std::memory_order_release);
                         }
                         triggerShakeOnce = false;
                     }
-                } else
+                } else if (!m_isHolding) {
                     triggerShakeOnce = true;
-            
+                }
+                
                 m_lastNavigationResult = NavigationResult::HitBoundary;
                 return oldFocus;
             }
-                        
+            
             
             inline bool isAtTop() {
                 if (m_items.empty()) return true;
@@ -7007,20 +6940,19 @@ namespace tsl {
                 m_nextOffset = std::max(m_nextOffset - scrollAmount, 0.0f);
             }
 
-            // Add these methods to handle jumps with smooth scrolling
+            // Jump to Bottom (original behavior + fixed trigger condition)
             Element* handleJumpToBottom(Element* oldFocus) {
                 if (m_items.empty()) return oldFocus;
                 
                 invalidate();
                 resetNavigationState();
-                jumpToBottom.store(false, std::memory_order_release);  // Reset flag
+                jumpToBottom.store(false, std::memory_order_release);
                 
-                // Calculate target offset once (good optimization to keep)
-                const float targetOffset = (m_listHeight > getHeight()) ? 
+                const float targetOffset = (m_listHeight > getHeight()) ?
                                            static_cast<float>(m_listHeight - getHeight()) : 0.0f;
                 static constexpr float tolerance = 5.0f;
-                
-                // Find the last focusable item
+            
+                // Find last focusable item (search backward)
                 size_t lastFocusableIndex = m_items.size();
                 for (ssize_t i = static_cast<ssize_t>(m_items.size()) - 1; i >= 0; --i) {
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
@@ -7029,47 +6961,46 @@ namespace tsl {
                         break;
                     }
                 }
-                
-                // Check if we're already at the bottom with proper tolerance
-                bool alreadyAtBottom = false;
-                if (lastFocusableIndex < m_items.size()) {
-                    alreadyAtBottom = (m_focusedIndex == lastFocusableIndex) && 
-                                     (std::abs(m_nextOffset - targetOffset) <= tolerance);
-                }
-                
-                if (alreadyAtBottom) {
-                    return oldFocus;  // Already at bottom, do nothing
-                }
-                
-                // Not at bottom - perform the jump using SAME logic as wrapToBottom
-                if (lastFocusableIndex < m_items.size()) {
-                    m_focusedIndex = lastFocusableIndex;
-                    m_nextOffset = targetOffset;  // Use same calculation as wrapToBottom
-                    
-                    Element* newFocus = m_items[lastFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
-                    if (newFocus && newFocus != oldFocus) {
-                        return newFocus;
-                    }
-                }
-                
-                // No focusable items - just set target to bottom (same as wrapToBottom)
+            
+                if (lastFocusableIndex == m_items.size())
+                    return oldFocus; // no focusable items
+            
+                bool alreadyAtBottom = (m_focusedIndex == lastFocusableIndex) &&
+                                       (std::abs(m_nextOffset - targetOffset) <= tolerance);
+                if (alreadyAtBottom)
+                    return oldFocus;
+            
+                const float oldOffset = m_nextOffset;
+                m_focusedIndex = lastFocusableIndex;
                 m_nextOffset = targetOffset;
-                return oldFocus;
+            
+                Element* newFocus = m_items[lastFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
+            
+                // Trigger feedback if offset or focus changed
+                if ((newFocus && newFocus != oldFocus) ||
+                    (std::abs(m_nextOffset - oldOffset) > tolerance)) {
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    triggerNavigationFeedback();
+                }
+            
+                return newFocus ? newFocus : oldFocus;
             }
             
+            
+            // Jump to Top (original behavior + fixed trigger condition)
             Element* handleJumpToTop(Element* oldFocus) {
                 if (m_items.empty()) return oldFocus;
-                
+            
                 invalidate();
                 resetNavigationState();
-                jumpToTop.store(false, std::memory_order_release);  // Reset flag
-                
-                // Define constants for clarity and consistency
+                jumpToTop.store(false, std::memory_order_release);
+            
                 static constexpr float targetOffset = 0.0f;
-                static constexpr float tolerance = 0.0f;
-                
-                // Find the first focusable item
-                size_t firstFocusableIndex = m_items.size();  // Default to invalid
+                static constexpr float tolerance = 5.0f;
+            
+                // Find first focusable item (search forward)
+                size_t firstFocusableIndex = m_items.size();
                 for (size_t i = 0; i < m_items.size(); ++i) {
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
                     if (test) {
@@ -7077,32 +7008,30 @@ namespace tsl {
                         break;
                     }
                 }
-                
-                // Check if we're already at the top with proper tolerance
-                bool alreadyAtTop = false;
-                if (firstFocusableIndex < m_items.size()) {
-                    alreadyAtTop = (m_focusedIndex == firstFocusableIndex) && 
-                                  (std::abs(m_nextOffset - targetOffset) <= tolerance);
-                }
-                
-                if (alreadyAtTop) {
-                    return oldFocus;  // Already at top, do nothing
-                }
-                
-                // Not at top - perform the jump using SAME logic as wrapToTop
-                if (firstFocusableIndex < m_items.size()) {
-                    m_focusedIndex = firstFocusableIndex;
-                    m_nextOffset = targetOffset;  // Same as wrapToTop
-                    
-                    Element* newFocus = m_items[firstFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
-                    if (newFocus && newFocus != oldFocus) {
-                        return newFocus;
-                    }
-                }
-                
-                // No focusable items - just set target to top (same as wrapToTop)
+            
+                if (firstFocusableIndex == m_items.size())
+                    return oldFocus; // no focusable items
+            
+                bool alreadyAtTop = (m_focusedIndex == firstFocusableIndex) &&
+                                    (std::abs(m_nextOffset - targetOffset) <= tolerance);
+                if (alreadyAtTop)
+                    return oldFocus;
+            
+                const float oldOffset = m_nextOffset;
+                m_focusedIndex = firstFocusableIndex;
                 m_nextOffset = targetOffset;
-                return oldFocus;
+            
+                Element* newFocus = m_items[firstFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
+            
+                // Trigger feedback if offset or focus changed
+                if ((newFocus && newFocus != oldFocus) ||
+                    (std::abs(m_nextOffset - oldOffset) > tolerance)) {
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerNavigationSound.store(true, std::memory_order_release);
+                    triggerNavigationFeedback();
+                }
+            
+                return newFocus ? newFocus : oldFocus;
             }
             
             Element* handleSkipDown(Element* oldFocus) {
@@ -7111,12 +7040,11 @@ namespace tsl {
                 invalidate();
                 resetNavigationState();
             
-                // Calculate target offset once (good optimization to keep)
-                const float targetOffset = (m_listHeight > getHeight()) ? 
+                const float targetOffset = (m_listHeight > getHeight()) ?
                                            static_cast<float>(m_listHeight - getHeight()) : 0.0f;
                 static constexpr float tolerance = 0.0f;
-
-                // Find the last focusable item
+            
+                // Find last focusable item
                 size_t lastFocusableIndex = m_items.size();
                 for (ssize_t i = static_cast<ssize_t>(m_items.size()) - 1; i >= 0; --i) {
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
@@ -7125,31 +7053,21 @@ namespace tsl {
                         break;
                     }
                 }
-
-                // Check if we're already at the bottom with proper tolerance
-                bool alreadyAtBottom = false;
-                if (lastFocusableIndex < m_items.size()) {
-                    alreadyAtBottom = (m_focusedIndex == lastFocusableIndex) && 
-                                     (std::abs(m_nextOffset - targetOffset) <= tolerance);
-                }
-                
-                if (alreadyAtBottom) {
-                    return oldFocus;  // Already at bottom, do nothing
-                }
-
-
-                const float viewHeight = static_cast<float>(getHeight());
-                const float maxOffset = (m_listHeight > getHeight()) ? static_cast<float>(m_listHeight - getHeight()) : 0.0f;
             
-                // Calculate the target viewport center after skipping
+                const bool alreadyAtBottom = (lastFocusableIndex < m_items.size()) &&
+                                       (m_focusedIndex == lastFocusableIndex) &&
+                                       (std::abs(m_nextOffset - targetOffset) <= tolerance);
+            
+                if (alreadyAtBottom) return oldFocus;
+            
+                const float viewHeight = static_cast<float>(getHeight());
+                const float maxOffset = (m_listHeight > viewHeight) ? static_cast<float>(m_listHeight - viewHeight) : 0.0f;
                 const float targetViewportTop = std::min(m_offset + viewHeight, maxOffset);
-
-                // Check if we traveled less than a full viewport
+            
                 const float actualTravelDistance = targetViewportTop - m_offset;
                 const bool traveledFullViewport = (actualTravelDistance >= viewHeight - tolerance);
                 const float targetViewportCenter = targetViewportTop + (viewHeight / 2.0f + VIEW_CENTER_OFFSET);
             
-                // Find the item closest to the center of the new viewport
                 float itemTop = 0.0f;
                 size_t targetIndex = 0;
                 bool foundFocusable = false;
@@ -7160,7 +7078,6 @@ namespace tsl {
                     const float itemCenter = itemTop + (itemHeight / 2.0f);
                     const float distanceFromCenter = std::abs(itemCenter - targetViewportCenter);
             
-                    // Check if this item is focusable and closer to center
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
                     if (test && test->m_isItem && distanceFromCenter < bestDistance) {
                         targetIndex = i;
@@ -7171,6 +7088,8 @@ namespace tsl {
                     itemTop += itemHeight;
                 }
             
+                const float oldOffset = m_nextOffset;
+            
                 if (foundFocusable) {
                     bool nearBottom = true;
                     if (targetIndex > m_focusedIndex && traveledFullViewport) {
@@ -7178,46 +7097,59 @@ namespace tsl {
                         nearBottom = false;
                     }
                     isTableScrolling.store(false, std::memory_order_release);
-                    updateScrollOffset(); // This will center the cursor properly
-                    
+                    updateScrollOffset();
+            
                     Element* newFocus = m_items[targetIndex]->requestFocus(oldFocus, FocusDirection::None);
-                    return (newFocus && newFocus != oldFocus && !nearBottom && traveledFullViewport) ? newFocus : handleJumpToBottom(oldFocus);
+            
+                    if (newFocus && newFocus != oldFocus && !nearBottom && traveledFullViewport) {
+                        //triggerRumbleClick.store(true, std::memory_order_release);
+                        //triggerNavigationSound.store(true, std::memory_order_release);
+                        triggerNavigationFeedback();
+                        return newFocus;
+                    } else {
+                        return handleJumpToBottom(oldFocus);
+                    }
                 } else {
+                    // Scroll viewport even if no focusable items
                     isTableScrolling.store(true, std::memory_order_release);
                     m_nextOffset = targetViewportTop;
-
-                    // NEW: Find the last focusable item that's still visible
+            
+                    if (std::abs(m_nextOffset - oldOffset) > 0.0f) {
+                        //triggerRumbleClick.store(true, std::memory_order_release);
+                        //triggerNavigationSound.store(true, std::memory_order_release);
+                        triggerNavigationFeedback();
+                    }
+            
+                    // Focus last visible focusable item
                     float searchItemTop = 0.0f;
-                    size_t lastVisibleFocusable = m_focusedIndex;  // Default to current
-                    
+                    size_t lastVisibleFocusable = m_focusedIndex;
+            
                     for (size_t i = 0; i < m_items.size(); ++i) {
                         const float itemHeight = m_items[i]->getHeight();
                         const float itemBottom = searchItemTop + itemHeight;
-                        
-                        // Stop if we've gone past the new viewport
+            
                         if (searchItemTop >= targetViewportTop + viewHeight) break;
-                        
-                        // Check if this item is focusable and visible in the new viewport
+            
                         if (itemBottom > targetViewportTop) {
                             Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
-                            if (test && test->m_isItem) {
-                                lastVisibleFocusable = i;
-                            }
+                            if (test && test->m_isItem) lastVisibleFocusable = i;
                         }
-                        
+            
                         searchItemTop += itemHeight;
                     }
-                    
-                    // Focus on the last visible focusable item
+            
                     if (lastVisibleFocusable != m_focusedIndex) {
                         m_focusedIndex = lastVisibleFocusable;
                         Element* newFocus = m_items[m_focusedIndex]->requestFocus(oldFocus, FocusDirection::None);
                         if (newFocus && newFocus != oldFocus) {
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            triggerNavigationFeedback();
                             return newFocus;
                         }
                     }
                 }
-
+            
                 return oldFocus;
             }
             
@@ -7227,12 +7159,11 @@ namespace tsl {
                 invalidate();
                 resetNavigationState();
             
-                // Define constants for clarity and consistency
                 static constexpr float targetOffset = 0.0f;
                 static constexpr float tolerance = 0.0f;
-
-                // Find the first focusable item
-                size_t firstFocusableIndex = m_items.size();  // Default to invalid
+            
+                // Find first focusable item
+                size_t firstFocusableIndex = m_items.size();
                 for (size_t i = 0; i < m_items.size(); ++i) {
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
                     if (test) {
@@ -7240,31 +7171,20 @@ namespace tsl {
                         break;
                     }
                 }
-                
-                // Check if we're already at the top with proper tolerance
-                bool alreadyAtTop = false;
-                if (firstFocusableIndex < m_items.size()) {
-                    alreadyAtTop = (m_focusedIndex == firstFocusableIndex) && 
-                                  (std::abs(m_nextOffset - targetOffset) <= tolerance);
-                }
-                
-                if (alreadyAtTop) {
-                    return oldFocus;  // Already at top, do nothing
-                }
-
-
+            
+                const bool alreadyAtTop = (firstFocusableIndex < m_items.size()) &&
+                                    (m_focusedIndex == firstFocusableIndex) &&
+                                    (std::abs(m_nextOffset - targetOffset) <= tolerance);
+            
+                if (alreadyAtTop) return oldFocus;
+            
                 const float viewHeight = static_cast<float>(getHeight());
-                
-                // Calculate the target viewport center after skipping
                 const float targetViewportTop = std::max(0.0f, m_offset - viewHeight);
-
-                // Check if we traveled less than a full viewport
+            
                 const float actualTravelDistance = m_offset - targetViewportTop;
                 const bool traveledFullViewport = (actualTravelDistance >= viewHeight - tolerance);
-
                 const float targetViewportCenter = targetViewportTop + (viewHeight / 2.0f + VIEW_CENTER_OFFSET);
             
-                // Find the item closest to the center of the new viewport
                 float itemTop = 0.0f;
                 size_t targetIndex = 0;
                 bool foundFocusable = false;
@@ -7275,7 +7195,6 @@ namespace tsl {
                     const float itemCenter = itemTop + (itemHeight / 2.0f);
                     const float distanceFromCenter = std::abs(itemCenter - targetViewportCenter);
             
-                    // Check if this item is focusable and closer to center
                     Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
                     if (test && test->m_isItem && distanceFromCenter < bestDistance) {
                         targetIndex = i;
@@ -7286,53 +7205,69 @@ namespace tsl {
                     itemTop += itemHeight;
                 }
             
+                const float oldOffset = m_nextOffset;
+            
                 if (foundFocusable) {
-
                     bool nearTop = true;
                     if (targetIndex < m_focusedIndex && traveledFullViewport) {
                         m_focusedIndex = targetIndex;
                         nearTop = false;
                     }
-                    //if (traveledFullViewport)
                     isTableScrolling.store(false, std::memory_order_release);
-                    updateScrollOffset(); // This will center the cursor properly
-                    
+                    updateScrollOffset();
+            
                     Element* newFocus = m_items[targetIndex]->requestFocus(oldFocus, FocusDirection::None);
-                    return (newFocus && newFocus != oldFocus && !nearTop && traveledFullViewport) ? newFocus : handleJumpToTop(oldFocus);
+            
+                    if (newFocus && newFocus != oldFocus && !nearTop && traveledFullViewport) {
+                        //triggerRumbleClick.store(true, std::memory_order_release);
+                        //triggerNavigationSound.store(true, std::memory_order_release);
+                        triggerNavigationFeedback();
+                        return newFocus;
+                    } else {
+                        return handleJumpToTop(oldFocus);
+                    }
                 } else {
+                    // Scroll viewport even if no focusable items
                     isTableScrolling.store(true, std::memory_order_release);
                     m_nextOffset = targetViewportTop;
-                    
-                    // NEW: Find the first focusable item that's still visible
+            
+                    if (std::abs(m_nextOffset - oldOffset) > 0.0f) {
+                        //triggerRumbleClick.store(true, std::memory_order_release);
+                        //triggerNavigationSound.store(true, std::memory_order_release);
+                        triggerNavigationFeedback();
+                    }
+            
+                    // Focus first visible focusable item
                     float searchItemTop = 0.0f;
-                    size_t firstVisibleFocusable = m_focusedIndex;  // Default to current
-                    
+                    size_t firstVisibleFocusable = m_focusedIndex;
+            
                     for (size_t i = 0; i < m_items.size(); ++i) {
                         const float itemHeight = m_items[i]->getHeight();
                         const float itemBottom = searchItemTop + itemHeight;
-                        
-                        // Check if this item is visible in the new viewport
+            
                         if (itemBottom > targetViewportTop && searchItemTop < targetViewportTop + viewHeight) {
                             Element* test = m_items[i]->requestFocus(nullptr, FocusDirection::None);
                             if (test && test->m_isItem) {
                                 firstVisibleFocusable = i;
-                                break;  // Take the first one for skip up
+                                break;
                             }
                         }
-                        
+            
                         searchItemTop += itemHeight;
                     }
-                    
-                    // Focus on the first visible focusable item
+            
                     if (firstVisibleFocusable != m_focusedIndex) {
                         m_focusedIndex = firstVisibleFocusable;
                         Element* newFocus = m_items[m_focusedIndex]->requestFocus(oldFocus, FocusDirection::None);
                         if (newFocus && newFocus != oldFocus) {
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            triggerNavigationFeedback();
                             return newFocus;
                         }
                     }
                 }
-                
+            
                 return oldFocus;
             }
             
@@ -7411,6 +7346,7 @@ namespace tsl {
         public:
             u32 width, height;
             u64 m_touchStartTime_ns;
+            bool isLocked = false;
         
         #if IS_LAUNCHER_DIRECTIVE
             ListItem(const std::string& text, const std::string& value = "", bool isMini = false, bool useScriptKey = true)
@@ -7465,7 +7401,7 @@ namespace tsl {
             #if IS_LAUNCHER_DIRECTIVE
                 static const std::vector<std::string> specialChars = {ult::STAR_SYMBOL};
             #else
-                static const std::vector<std::string> specialChars = {};
+                static const std::vector<std::string> specialChars = {ult::DIVIDER_SYMBOL};
             #endif
                 // Fast path for non-truncated text
                 if (!m_flags.m_truncated) [[likely]] {
@@ -7480,9 +7416,13 @@ namespace tsl {
                             : (useClickTextColor
                                 ? clickTextColor
                                 : defaultTextColor));
-
+                #if IS_LAUNCHER_DIRECTIVE
                     renderer->drawStringWithColoredSections(m_text_clean, false, specialChars, this->getX() + 19, this->getY() + 45 - yOffset, 23,
                         textColor, (m_focused ? starColor : selectionStarColor));
+                #else
+                    renderer->drawStringWithColoredSections(m_text_clean, false, specialChars, this->getX() + 19, this->getY() + 45 - yOffset, 23,
+                        textColor, textSeparatorColor);
+                #endif
                 } else {
                     drawTruncatedText(renderer, yOffset, useClickTextColor, specialChars);
                 }
@@ -7498,11 +7438,27 @@ namespace tsl {
         
             virtual bool onClick(u64 keys) override {
                 if (keys & KEY_A) [[likely]] {
+                    triggerRumbleClick.store(true, std::memory_order_release);
+
+                    if (isLocked)
+                        triggerWallSound.store(true, std::memory_order_release);
+                    else if (m_value.find(ult::CAPITAL_ON_STR) != std::string::npos)
+                        triggerOffSound.store(true, std::memory_order_release);
+                    else if (m_value.find(ult::CAPITAL_OFF_STR) != std::string::npos)
+                        triggerOnSound.store(true, std::memory_order_release);
+                    else
+                        triggerEnterSound.store(true, std::memory_order_release);
+                    
                     if (m_flags.m_useClickAnimation)
                         triggerClickAnimation();
                 } else if (keys & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT)) [[unlikely]] {
                     m_clickAnimationProgress = 0;
                 }
+                //if (keys & KEY_B) {
+                //    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                //    triggerExitSound.store(true, std::memory_order_release);
+                //    
+                //}
                 return Element::onClick(keys);
             }
         
@@ -7624,6 +7580,7 @@ namespace tsl {
             std::string m_scrollText;
             std::string m_ellipsisText;
             u16 m_listItemHeight;  // Changed from u32 to u16
+
             
             // Bitfield for boolean flags - saves ~7 bytes per instance
             struct {
@@ -7719,14 +7676,23 @@ namespace tsl {
             void drawTruncatedText(gfx::Renderer* renderer, s32 yOffset, bool useClickTextColor, const std::vector<std::string>& specialSymbols = {}) {
                 if (m_focused) {
                     renderer->enableScissoring(getX() + 6, 97, m_maxWidth + (m_value.empty() ? 49 : 27), tsl::cfg::FramebufferHeight - 170);
-                    
+                #if IS_LAUNCHER_DIRECTIVE
                     renderer->drawStringWithColoredSections(m_scrollText, false, specialSymbols, getX() + 19 - static_cast<s32>(m_scrollOffset), getY() + 45 - yOffset, 23,
                         !ult::useSelectionText ? defaultTextColor: (useClickTextColor ? clickTextColor : selectedTextColor), (starColor));
+                #else
+                    renderer->drawStringWithColoredSections(m_scrollText, false, specialSymbols, getX() + 19 - static_cast<s32>(m_scrollOffset), getY() + 45 - yOffset, 23,
+                        !ult::useSelectionText ? defaultTextColor: (useClickTextColor ? clickTextColor : selectedTextColor), (textSeparatorColor));
+                #endif
                     renderer->disableScissoring();
                     handleScrolling();
                 } else {
+                #if IS_LAUNCHER_DIRECTIVE
                     renderer->drawStringWithColoredSections(m_ellipsisText, false, specialSymbols, getX() + 19, getY() + 45 - yOffset, 23,
                         m_flags.m_hasCustomTextColor ? m_customTextColor : (useClickTextColor ? clickTextColor : defaultTextColor), (starColor));
+                #else
+                    renderer->drawStringWithColoredSections(m_ellipsisText, false, specialSymbols, getX() + 19, getY() + 45 - yOffset, 23,
+                        m_flags.m_hasCustomTextColor ? m_customTextColor : (useClickTextColor ? clickTextColor : defaultTextColor), (textSeparatorColor));
+                #endif
                 }
             }
                     
@@ -8116,12 +8082,9 @@ namespace tsl {
                 
                 
                 // CUSTOM SECTION START (modification for submenu footer color)
-                //const std::string& value = this->m_value;
                 const s32 xPosition = this->getX() + this->m_maxWidth + 44 + 3;
                 const s32 yPosition = this->getY() + 45 - yOffset;
                 static constexpr s32 fontSize = 20;
-                //bool isFaint = ;
-                //bool isFocused = this->m_focused;
             
             
                 //static bool lastRunningInterpreter = ult::runningInterpreter.load(std::memory_order_acquire);
@@ -8316,7 +8279,12 @@ namespace tsl {
 
                 // Handle KEY_A for toggling
                 if (keys & KEY_A) {
-
+                    triggerRumbleClick.store(true, std::memory_order_release);
+                    if (!this->m_state)
+                        triggerOnSound.store(true, std::memory_order_release);
+                    else
+                        triggerOffSound.store(true, std::memory_order_release);
+                    
                     
                     this->m_state = !this->m_state;
                     
@@ -8326,8 +8294,14 @@ namespace tsl {
                     this->m_stateChangedListener(this->m_state);
                     
                     
-                    return ListItem::onClick(keys);
+                    return true;
                 }
+                //if (keys & KEY_B) {
+                //    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                //    triggerExitSound.store(true, std::memory_order_release);
+                //    
+                //}
+
                 #if IS_LAUNCHER_DIRECTIVE
                 // Handle SCRIPT_KEY for executing script logic
                 else if (keys & SCRIPT_KEY) {
@@ -8780,15 +8754,25 @@ namespace tsl {
                 const s32 circleCenterX = this->getX() + 59 + handlePos;
                 const s32 circleCenterY = this->getY() + 40 + 16 - 1;
                 static constexpr s32 circleRadius = 16;
-                
+                static bool triggerOnce = true;
+
                 const bool touchInCircle = (std::abs(initialX - circleCenterX) <= circleRadius) && (std::abs(initialY - circleCenterY) <= circleRadius);
                 
                 if (event == TouchEvent::Release) {
+                    triggerOnce = true;
+                    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                    triggerOffSound.store(true, std::memory_order_release);
                     touchInSliderBounds = false;
                     return false;
                 }
             
                 if (touchInCircle || touchInSliderBounds) {
+                    if (triggerOnce){
+                        triggerOnce = false;
+                        triggerRumbleClick.store(true, std::memory_order_release);
+                        triggerOnSound.store(true, std::memory_order_release);
+                    }
+
                     touchInSliderBounds = true;
                     //if (currX > this->getLeftBound() + 50 && currX < this->getRightBound() && currY > this->getTopBound() && currY < this->getBottomBound()) {
                     s16 newValue = (static_cast<float>(currX - (this->getX() + 60)) / static_cast<float>(this->getWidth() - 95)) * 100;
@@ -8899,9 +8883,9 @@ namespace tsl {
                 
                     std::string valuePart;
                     if (!m_usingNamedStepTrackbar) {
-                        valuePart = (this->m_units == "%" || this->m_units == "°C" || this->m_units == "°F") ? 
-                                   ult::to_string(this->m_value) + this->m_units : 
-                                   ult::to_string(this->m_value) + (this->m_units.empty() ? "" : " ") + this->m_units;
+                        valuePart = (m_units.compare("%") == 0 || m_units.compare("°C") == 0 || m_units.compare("°F") == 0)
+                                    ? ult::to_string(m_value) + m_units
+                                    : ult::to_string(m_value) + (m_units.empty() ? "" : " ") + m_units;
                     } else {
                         valuePart = this->m_selection;
                     }
@@ -8917,18 +8901,6 @@ namespace tsl {
                     if (m_icon[0] != '\0')
                         renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2, 23, a(tsl::style::color::ColorText));
                 }
-
-                //renderer->drawRect(this->getX(), this->getY(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
-                //renderer->drawRect(this->getX(), this->getBottomBound(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
-
-                //u16 handlePos = (this->getWidth() - 95) * static_cast<float>(this->m_value) / 100;
-                //renderer->drawCircle(this->getX() + 60, this->getY() + 42, 2, true, a(tsl::style::color::ColorHighlight));
-                //renderer->drawCircle(this->getX() + 60 + this->getWidth() - 95, this->getY() + 42, 2, true, a(tsl::style::color::ColorFrame));
-                //renderer->drawRect(this->getX() + 60 + handlePos, this->getY() + 40, this->getWidth() - 95 - handlePos, 5, a(tsl::style::color::ColorFrame));
-                //renderer->drawRect(this->getX() + 60, this->getY() + 40, handlePos, 5, a(tsl::style::color::ColorHighlight));
-                //
-                //renderer->drawCircle(this->getX() + 62 + handlePos, this->getY() + 42, 18, true, a(tsl::style::color::ColorHandle));
-                //renderer->drawCircle(this->getX() + 62 + handlePos, this->getY() + 42, 18, false, a(tsl::style::color::ColorFrame));
 
 
                 if (m_lastBottomBound != this->getTopBound())
@@ -9020,8 +8992,7 @@ namespace tsl {
                 }
 
 
-                if (!ult::onTrackBar.load(std::memory_order_acquire))
-                    ult::onTrackBar.store(true, std::memory_order_release);
+                ult::onTrackBar.exchange(true, std::memory_order_acq_rel);
             }
 
             /**
@@ -9108,8 +9079,14 @@ namespace tsl {
                 if (keysHeld & (KEY_LEFT | KEY_RIGHT)) {
                     if ((tick == 0 || tick > 20) && (tick % 3) == 0) {
                         if (keysHeld & KEY_LEFT && this->m_value > 0) {
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            triggerNavigationFeedback();
                             this->m_value = std::max(this->m_value - (100 / (this->m_numSteps - 1)), 0);
                         } else if (keysHeld & KEY_RIGHT && this->m_value < 100) {
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            triggerNavigationFeedback();
                             this->m_value = std::min(this->m_value + (100 / (this->m_numSteps - 1)), 100);
                         } else {
                             return false;
@@ -9131,15 +9108,25 @@ namespace tsl {
                 const s32 circleCenterX = this->getX() + 59 + handlePos;
                 const s32 circleCenterY = this->getY() + 40 + 16 - 1;
                 static constexpr s32 circleRadius = 16;
+                static bool triggerOnce = true;
                 
                 const bool touchInCircle = (std::abs(initialX - circleCenterX) <= circleRadius) && (std::abs(initialY - circleCenterY) <= circleRadius);
                 
                 if (event == TouchEvent::Release) {
+                    triggerOnce = true;
+                    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                    triggerOffSound.store(true, std::memory_order_release);
                     touchInSliderBounds = false;
                     return false;
                 }
             
                 if (touchInCircle || touchInSliderBounds) {
+                    if (triggerOnce){
+                        triggerOnce = false;
+                        triggerRumbleClick.store(true, std::memory_order_release);
+                        triggerOnSound.store(true, std::memory_order_release);
+                    }
+
                     touchInSliderBounds = true;
                     //if (currY > this->getTopBound() && currY < this->getBottomBound()) {
                     s16 newValue = (static_cast<float>(currX - (this->getX() + 60)) / static_cast<float>(this->getWidth() - 95)) * 100;
@@ -9153,6 +9140,9 @@ namespace tsl {
                     }
         
                     if (newValue != this->m_value) {
+                        //triggerRumbleClick.store(true, std::memory_order_release);
+                        //triggerNavigationSound.store(true, std::memory_order_release);
+                        triggerNavigationFeedback();
                         this->m_value = newValue;
                         this->m_valueChangedListener(this->getProgress());
                     }
@@ -9337,9 +9327,9 @@ namespace tsl {
                 
                     std::string valuePart;
                     if (!m_usingNamedStepTrackbar) {
-                        valuePart = (this->m_units == "%" || this->m_units == "°C" || this->m_units == "°F") ? 
-                                   ult::to_string(this->m_value) + this->m_units : 
-                                   ult::to_string(this->m_value) + (this->m_units.empty() ? "" : " ") + this->m_units;
+                        valuePart = (m_units.compare("%") == 0 || m_units.compare("°C") == 0 || m_units.compare("°F") == 0)
+                                    ? ult::to_string(m_value) + m_units
+                                    : ult::to_string(m_value) + (m_units.empty() ? "" : " ") + m_units;
                     } else {
                         valuePart = this->m_selection;
                     }
@@ -9534,6 +9524,11 @@ namespace tsl {
                 }
             
                 if ((keysDown & KEY_A) && !(keysHeld & ~KEY_A & ALL_KEYS_MASK)) {
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerEnterSound.store(true, std::memory_order_release);
+                    triggerEnterFeedback();
+                    
+
                     if (!m_unlockedTrackbar) {
                         ult::atomicToggle(ult::allowSlide);
                         m_holding = false;
@@ -9544,6 +9539,11 @@ namespace tsl {
                     }
                     return true;
                 }
+
+                //if (keysDown & KEY_B && !(keysHeld & ~KEY_B & ALL_KEYS_MASK)) {
+                //    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                //    triggerExitSound.store(true, std::memory_order_release);
+                //}
             
                 if ((keysDown & SCRIPT_KEY) && !(keysHeld & ~SCRIPT_KEY & ALL_KEYS_MASK)) {
                     if (m_scriptKeyListener) {
@@ -9558,6 +9558,9 @@ namespace tsl {
                         // If we were holding and repeating, just stop
                         if (m_wasLastHeld) {
                             m_wasLastHeld = false;
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+
                             m_holding = false;
                             updateAndExecute();
                             lastUpdate_ns = armTicksToNs(armGetSystemTick());
@@ -9566,6 +9569,8 @@ namespace tsl {
                         // If it was a quick tap (no repeat happened), handle the single tick
                         else if (m_holding) {
                             m_holding = false;
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            //triggerRumbleClick.store(true, std::memory_order_release);
                             updateAndExecute();
                             lastUpdate_ns = armTicksToNs(armGetSystemTick());
                             return true;
@@ -9580,6 +9585,7 @@ namespace tsl {
             
                     // Handle initial key press
                     if (keysDown & KEY_LEFT || keysDown & KEY_RIGHT) {
+                        triggerRumbleClick.store(true, std::memory_order_release);
                         // Start tracking the hold
                         m_holding = true;
                         m_wasLastHeld = false;
@@ -9607,16 +9613,27 @@ namespace tsl {
             
                         // Initial delay before repeating starts (e.g., 300ms)
                         static constexpr u64 initialDelay_ns = 300000000ULL;
+                        // Calculate interval with acceleration
+                        static constexpr u64 initialInterval_ns = 67000000ULL;  // ~67ms
+                        static constexpr u64 shortInterval_ns = 10000000ULL;    // ~10ms
+                        static constexpr u64 transitionPoint_ns = 1000000000ULL; // 2 seconds
                         
+                        // Trigger navigation sound every 100ms while holding
+                        static u64 lastNavigationSound_ns = 0;
+                        if (currentTime_ns - lastNavigationSound_ns >= 150'000'000ULL) { // 100ms
+                            if (this->m_value > m_minValue && this->m_value < m_maxValue) {
+                                //triggerRumbleClick.store(true, std::memory_order_release);
+                                //triggerNavigationSound.store(true, std::memory_order_release);
+                                triggerNavigationFeedback();
+                                
+                            }
+                            lastNavigationSound_ns = currentTime_ns;
+                        }
+
                         // If we haven't passed the initial delay, don't repeat yet
                         if (holdDuration_ns < initialDelay_ns) {
                             return true;
                         }
-            
-                        // Calculate interval with acceleration
-                        static constexpr u64 initialInterval_ns = 67000000ULL;  // ~67ms
-                        static constexpr u64 shortInterval_ns = 10000000ULL;    // ~10ms
-                        static constexpr u64 transitionPoint_ns = 2000000000ULL; // 2 seconds
                         
                         const u64 holdDurationAfterDelay_ns = holdDuration_ns - initialDelay_ns;
                         const float t = std::min(1.0f, static_cast<float>(holdDurationAfterDelay_ns) / static_cast<float>(transitionPoint_ns));
@@ -9661,14 +9678,23 @@ namespace tsl {
                 const s32 circleCenterX = this->getX() + 59 + handlePos;
                 const s32 circleCenterY = this->getY() + 40 + 16 - 1;
                 static constexpr s32 circleRadius = 16;
+                static bool triggerOnce = true;
                 
                 const bool touchInCircle = (std::abs(initialX - circleCenterX) <= circleRadius) && (std::abs(initialY - circleCenterY) <= circleRadius);
                 
-                if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire))
+                if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
+
                     return false;
-        
+                }
+                
                 if ((touchInCircle || touchInSliderBounds)) {
                     touchInSliderBounds = true;
+
+                    if (triggerOnce) {
+                        triggerOnce = false;
+                        triggerRumbleClick.store(true, std::memory_order_release);
+                        triggerOnSound.store(true, std::memory_order_release);
+                    }
                     
                     const s16 newIndex = std::max(static_cast<s16>(0), std::min(static_cast<s16>((currX - (this->getX() + 59)) / static_cast<float>(this->getWidth() - 95) * (m_numSteps - 1)), static_cast<s16>(m_numSteps - 1)));
                     const s16 newValue = m_minValue + newIndex * (static_cast<float>(m_maxValue - m_minValue) / (m_numSteps - 1));
@@ -9680,11 +9706,20 @@ namespace tsl {
                         if (m_executeOnEveryTick) {
                             updateAndExecute(false);
                         }
+                        if (m_usingStepTrackbar || m_usingNamedStepTrackbar) {
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationSound.store(true, std::memory_order_release);
+                            triggerNavigationFeedback();
+                        }
                     } else {
                         if (event == TouchEvent::Release) {
+                            triggerOnce = true;
                             updateAndExecute();
                             if (event == TouchEvent::Release)
                                 touchInSliderBounds = false;
+
+                            triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                            triggerOffSound.store(true, std::memory_order_release);
                         }
                     }
         
@@ -9738,9 +9773,11 @@ namespace tsl {
                 std::string labelPart = this->m_label;
                 ult::removeTag(labelPart);
             
-                if (!m_usingNamedStepTrackbar)
-                    m_valuePart = (this->m_units == "%" || this->m_units == "°C" || this->m_units == "°F") ? ult::to_string(this->m_value) + this->m_units : ult::to_string(this->m_value) + (this->m_units.empty() ? "" : " ") + this->m_units;
-                else
+                if (!m_usingNamedStepTrackbar) {
+                    m_valuePart = (this->m_units.compare("%") == 0 || this->m_units.compare("°C") == 0 || this->m_units.compare("°F") == 0) 
+                                  ? ult::to_string(this->m_value) + this->m_units 
+                                  : ult::to_string(this->m_value) + (this->m_units.empty() ? "" : " ") + this->m_units;
+                } else
                     m_valuePart = this->m_selection;
             
                 const auto valueWidth = renderer->getTextDimensions(m_valuePart, false, 16).first;
@@ -10004,6 +10041,11 @@ namespace tsl {
             
                 // Check if KEY_A is pressed to toggle ult::allowSlide
                 if ((keysDown & KEY_A) && !(keysHeld & ~KEY_A & ALL_KEYS_MASK)) {
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerEnterSound.store(true, std::memory_order_release);
+                    triggerEnterFeedback();
+                    
+
                     if (!m_unlockedTrackbar) {
                         ult::atomicToggle(ult::allowSlide);
                         holding = false; // Reset holding state when KEY_A is pressed
@@ -10015,6 +10057,11 @@ namespace tsl {
                     return true;
                 }
             
+                //if (keysDown & KEY_B && !(keysHeld & ~KEY_B & ALL_KEYS_MASK)) {
+                //    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                //    triggerExitSound.store(true, std::memory_order_release);
+                //}
+
                 // Handle SCRIPT_KEY press
                 if ((keysDown & SCRIPT_KEY) && !(keysHeld & ~SCRIPT_KEY & ALL_KEYS_MASK)) {
                     if (m_scriptKeyListener) {
@@ -10047,9 +10094,17 @@ namespace tsl {
                         if ((tick == 0 || tick > 20) && (tick % 3) == 0) {
                             const float stepSize = static_cast<float>(m_maxValue - m_minValue) / (this->m_numSteps - 1);
                             if (keysHeld & KEY_LEFT && this->m_index > 0) {
+                                //triggerRumbleClick.store(true, std::memory_order_release);
+                                //triggerNavigationSound.store(true, std::memory_order_release);
+                                triggerNavigationFeedback();
+                                
                                 this->m_index--;
                                 this->m_value = static_cast<s16>(std::round(m_minValue + m_index * stepSize));
                             } else if (keysHeld & KEY_RIGHT && this->m_index < this->m_numSteps-1) {
+                                //triggerRumbleClick.store(true, std::memory_order_release);
+                                //triggerNavigationSound.store(true, std::memory_order_release);
+                                triggerNavigationFeedback();
+                                
                                 this->m_index++;
                                 this->m_value = static_cast<s16>(std::round(m_minValue + m_index * stepSize));
                             } else {
@@ -10185,6 +10240,13 @@ namespace tsl {
     static inline std::mutex notificationJsonMutex;
     static inline std::atomic<uint32_t> notificationGeneration{0};
     
+    struct NotificationFile {
+        std::string filename;
+        std::string fullPath;
+        time_t creationTime;
+        int priority;
+    };
+
     class NotificationPrompt {
     public:
         NotificationPrompt()
@@ -10497,17 +10559,6 @@ namespace tsl {
                 (!is_active_ && current_state_.activeText.empty() && pending_queue_.empty())) {
                 return;
             }
-
-            //if (pending_event_fire_.load(std::memory_order_acquire) &&
-            //    !ult::launchingOverlay.load(std::memory_order_acquire) &&
-            //    generation_ == notificationGeneration.load(std::memory_order_acquire))
-            //{
-            //    pending_event_fire_.store(false, std::memory_order_release);
-            //    
-            //    if ((current_state_.activeText.empty() || current_state_.state == PromptState::Inactive) && pending_queue_.empty()) {
-            //        eventFire(&notificationEvent);
-            //    }
-            //}
     
             //std::lock_guard<std::mutex> lg(state_mutex_);
             if (generation_ != notificationGeneration.load(std::memory_order_acquire) ||
@@ -10887,6 +10938,7 @@ namespace tsl {
          *
          */
         void show() {
+            
 
             if (this->m_disableNextAnimation) {
                 this->m_animationCounter = MAX_ANIMATION_COUNTER;
@@ -10899,6 +10951,11 @@ namespace tsl {
 
             ult::isHidden.store(false);
             this->onShow();
+            triggerRumbleClick.store(true, std::memory_order_release);
+
+            // reinitialize audio for changes from handheld to docked and vise versa
+            if (ult::expandedMemory && ult::useSoundEffects)
+                ult::AudioPlayer::reloadIfDockedChanged();
             
             //if (auto& currGui = this->getCurrentGui(); currGui != nullptr) // TESTING DISABLED (EFFECTS NEED TO BE VERIFIED)
             //    currGui->restoreFocus();
@@ -10909,12 +10966,15 @@ namespace tsl {
          *
          */
         void hide(bool useNoFade = false) {
+
+
             if (useNoFade) {
                 // Immediately hide overlay
                 ult::isHidden.store(true);
                 this->m_shouldHide = true;
                 return;
             }
+            
 
         #if IS_STATUS_MONITOR_DIRECTIVE
             if (FullMode && !deactivateOriginalFooter) {
@@ -10943,6 +11003,7 @@ namespace tsl {
             ult::isHidden.store(true);
             this->onHide();
         #endif
+            triggerRumbleClick.store(true, std::memory_order_release);
         }
         
         /**
@@ -11124,32 +11185,39 @@ namespace tsl {
                 return;
             }
             
-            // Static state management - made atomic for thread safety
-            static std::atomic<bool> screenshotStacksAdded{false};
+            // CRITICAL: Initialize to TRUE because stacks are added in init()!
+            static std::atomic<bool> screenshotStacksAdded{true};
             static std::atomic<bool> notificationCacheNeedsClearing{false};
-            
+
             auto& renderer = gfx::Renderer::get();
             renderer.startFrame();
         
             // Handle main UI rendering
             if (!promptOnly) {
-                // Screenshot management - thread-safe
-                if (!screenshotStacksAdded.load(std::memory_order_acquire) && !screenshotsAreForceDisabled.load(std::memory_order_acquire)) {
-                    renderer.addScreenshotStacks(false);
-                    screenshotStacksAdded.store(true, std::memory_order_release);
+
+                // In normal mode, ensure screenshots are enabled
+                // Only re-add if they were removed AND force-disable is not set
+                if (!screenshotStacksAdded.load(std::memory_order_acquire) &&
+                    !screenshotsAreForceDisabled.load(std::memory_order_acquire)) {
+                    if (!screenshotStacksAdded.exchange(true, std::memory_order_acq_rel)) {
+                        renderer.addScreenshotStacks(false);
+                    }
                 }
-        
+                
                 this->animationLoop();
                 this->getCurrentGui()->update();
                 this->getCurrentGui()->draw(&renderer);
                 
-                // Mark that we may need to clear notification cache later
-                notificationCacheNeedsClearing.store(true, std::memory_order_release);
+                //notificationCacheNeedsClearing.store(true, std::memory_order_release);
             } else {
-                // Prompt-only mode - clean up screenshots
-                if (screenshotStacksAdded.load(std::memory_order_acquire) && !screenshotsAreDisabled && !screenshotsAreForceDisabled.load(std::memory_order_acquire)) {
-                    renderer.removeScreenshotStacks(false);
-                    screenshotStacksAdded.store(false, std::memory_order_release);
+                // Prompt-only mode - temporarily remove screenshots
+                if (screenshotStacksAdded.load(std::memory_order_acquire) &&
+                    !screenshotsAreDisabled.load(std::memory_order_acquire) &&
+                    !screenshotsAreForceDisabled.load(std::memory_order_acquire)) {
+
+                    if (screenshotStacksAdded.exchange(false, std::memory_order_acq_rel)) {
+                        renderer.removeScreenshotStacks(false);
+                    }
                 }
                 renderer.clearScreen();
             }
@@ -11157,10 +11225,12 @@ namespace tsl {
             // Notification handling — safe, consistent, and null-guarded
             {
                 if (notification && notification->isActive()) {
-                    // Snapshot pointer to avoid it becoming null mid-use
                     notification->update();
                     notification->draw(&renderer, promptOnly);
-                    notificationCacheNeedsClearing.store(true, std::memory_order_release);
+
+                    // Only set flag if it's not already set
+                    notificationCacheNeedsClearing.exchange(true, std::memory_order_acq_rel);
+
                 } else if (notificationCacheNeedsClearing.exchange(false, std::memory_order_acq_rel)) {
                     tsl::gfx::FontManager::clearNotificationCache();
                     #if IS_STATUS_MONITOR_DIRECTIVE
@@ -11218,68 +11288,83 @@ namespace tsl {
 
             // Retrieve current focus and top/bottom elements of the GUI
             auto currentFocus = currentGui->getFocusedElement();
-            auto topElement = currentGui->getTopElement();
-
+            
 
             const bool interpreterIsRunning = ult::runningInterpreter.load(std::memory_order_acquire);
         #if !IS_STATUS_MONITOR_DIRECTIVE
             if (interpreterIsRunning) {
-                if (keysDown & KEY_UP && !(keysHeld & ~KEY_UP & ALL_KEYS_MASK))
+                if (keysDown & KEY_UP && !(keysHeld & ~KEY_UP & ALL_KEYS_MASK)) {
                     currentFocus->shakeHighlight(FocusDirection::Up);
-                else if (keysDown & KEY_DOWN && !(keysHeld & ~KEY_DOWN & ALL_KEYS_MASK))
+                    return;
+                }
+                else if (keysDown & KEY_DOWN && !(keysHeld & ~KEY_DOWN & ALL_KEYS_MASK)) {
                     currentFocus->shakeHighlight(FocusDirection::Down);
-                else if (keysDown & KEY_LEFT && !(keysHeld & ~KEY_LEFT & ALL_KEYS_MASK))
+                    return;
+                }
+                else if (keysDown & KEY_LEFT && !(keysHeld & ~KEY_LEFT & ALL_KEYS_MASK)) {
                     currentFocus->shakeHighlight(FocusDirection::Left);
-                else if (keysDown & KEY_RIGHT && !(keysHeld & ~KEY_RIGHT & ALL_KEYS_MASK))
+                    return;
+                }
+                else if (keysDown & KEY_RIGHT && !(keysHeld & ~KEY_RIGHT & ALL_KEYS_MASK)) {
                     currentFocus->shakeHighlight(FocusDirection::Right);
+                    return;
+                }
             }
         #endif
         
         #if IS_STATUS_MONITOR_DIRECTIVE
             if (FullMode && !deactivateOriginalFooter) {
-                if (ult::simulatedSelect.load(std::memory_order_acquire)) {
-                    ult::simulatedSelect.store(false, std::memory_order_release);
+                if (ult::simulatedSelect.exchange(false, std::memory_order_acq_rel))
                     keysDown |= KEY_A;
-                }
-                if (ult::simulatedBack.load(std::memory_order_acquire)) {
-                    ult::simulatedBack.store(false, std::memory_order_release);
+                
+                if (ult::simulatedBack.exchange(false, std::memory_order_acq_rel))
                     keysDown |= KEY_B;
-                }
 
                 if (!overrideBackButton) {
                     if (keysDown & KEY_B && !(keysHeld & ~KEY_B & ALL_KEYS_MASK)) {
                         if (!currentGui->handleInput(KEY_B,0,{},{},{})) {
                             this->goBack();
+                            if (this->m_guiStack.size() >= 1) {
+                                //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                                //triggerExitSound.store(true, std::memory_order_release);
+                                triggerExitFeedback();
+                            }
                             //ult::simulatedBackComplete = true;
                         }
                         return;
                     }
                 }
             } else {
-                if (ult::simulatedSelect.load(std::memory_order_acquire))
-                    ult::simulatedSelect.store(false, std::memory_order_release);
-                if (ult::simulatedBack.load(std::memory_order_acquire))
-                    ult::simulatedBack.store(false, std::memory_order_release);
+                ult::simulatedSelect.exchange(false, std::memory_order_acq_rel);
+                ult::simulatedBack.exchange(false, std::memory_order_acq_rel);
             }
         #else
-            if (ult::simulatedSelect.load(std::memory_order_acquire)) {
-                ult::simulatedSelect.store(false, std::memory_order_release);
+            if (ult::simulatedSelect.exchange(false, std::memory_order_acq_rel))
                 keysDown |= KEY_A;
-            }
-
-            if (ult::simulatedBack.load(std::memory_order_acquire)) {
-                ult::simulatedBack.store(false, std::memory_order_release);
+            
+            if (ult::simulatedBack.exchange(false, std::memory_order_acq_rel))
                 keysDown |= KEY_B;
-                //ult::simulatedBack = false;
-            }
 
             if (!overrideBackButton) {
                 if (keysDown & KEY_B && !(keysHeld & ~KEY_B & ALL_KEYS_MASK)) {
                     if (!currentGui->handleInput(KEY_B,0,{},{},{})) {
                         this->goBack();
+                        if (this->m_guiStack.size() >= 1 && !interpreterIsRunning) {
+                            //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                            //triggerExitSound.store(true, std::memory_order_release);
+                            triggerExitFeedback();
+                        }
                         //ult::simulatedBackComplete = true;
                     }
                     return;
+                }
+            } else {
+                if (keysDown & KEY_B && !(keysHeld & ~KEY_B & ALL_KEYS_MASK)) {
+                    if (this->m_guiStack.size() >= 1 && !interpreterIsRunning) {
+                        //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                        //triggerExitSound.store(true, std::memory_order_release);
+                        triggerExitFeedback();
+                    }
                 }
             }
         #endif
@@ -11294,6 +11379,8 @@ namespace tsl {
                 lastGuiPtr = currentGui.get();  // or just currentGui
             }
             
+            auto topElement = currentGui->getTopElement();
+
             const u64 currentTime_ns = armTicksToNs(armGetSystemTick());
 
             if (!currentFocus && !ult::simulatedBack.load(std::memory_order_acquire) && !ult::stillTouching.load(std::memory_order_acquire) && !oldTouchDetected && !interpreterIsRunning) {
@@ -11333,12 +11420,9 @@ namespace tsl {
                         currentGui->removeFocus();
                         currentGui->requestFocus(topElement, FocusDirection::None);
                     }
-                }
-                else if (ult::longTouchAndRelease.load(std::memory_order_acquire)) {
-                    ult::longTouchAndRelease.store(false, std::memory_order_release);
+                } else if (ult::longTouchAndRelease.exchange(false, std::memory_order_acq_rel)) {
                     hasScrolled = true;
-                } else if (ult::shortTouchAndRelease.load(std::memory_order_acquire)) { // cant be handled correctly without knowing where it is going after release
-                    ult::shortTouchAndRelease.store(false, std::memory_order_release);
+                } else if (ult::shortTouchAndRelease.exchange(false, std::memory_order_acq_rel)) {
                     hasScrolled = true;
                 }
             }
@@ -12041,6 +12125,8 @@ namespace tsl {
          * @note The Overlay gets closed once there are no more Guis on the stack
          */
         void goBack(u32 count = 1) {
+            tsl::elm::g_disableMenuCacheOnReturn.store(true, std::memory_order_release);
+
             // If there is exactly one GUI and an active notification, handle that first
             if (this->m_guiStack.size() == 1 && notification && notification->isActive()) {
                 this->close(); 
@@ -12066,13 +12152,16 @@ namespace tsl {
                 this->m_guiStack.pop();
             }
         
-            if (tsl::elm::skipDeconstruction.load(std::memory_order_acquire))
-                tsl::elm::skipDeconstruction.store(false, std::memory_order_release);
-        
+            tsl::elm::skipDeconstruction.exchange(false, std::memory_order_acq_rel);
+            
             // Close overlay if stack is empty
             if (this->m_guiStack.empty()) {
                 this->close();
+            } else {
+                //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                //triggerExitSound.store(true, std::memory_order_release);
             }
+
         }
 
         void pop(u32 count = 1) {
@@ -12295,6 +12384,8 @@ namespace tsl {
             // Clear any stale input from both controllers
             padUpdate(&pad_p1);
             padUpdate(&pad_handheld);
+
+            //ult::initRumble(); // initialize rumble
             
             enum WaiterObject {
                 WaiterObject_HomeButton,
@@ -12345,6 +12436,7 @@ namespace tsl {
             std::string text;
             int fontSize;
             int priority;
+            time_t creationTime;
 
             
             while (shData->running.load(std::memory_order_acquire)) {
@@ -12352,8 +12444,8 @@ namespace tsl {
                 const u64 nowTick = armGetSystemTick();
                 const u64 nowNs = armTicksToNs(nowTick);
                 
-        
-        
+                
+                
                 // Scan for input changes from both controllers
                 padUpdate(&pad_p1);
                 padUpdate(&pad_handheld);
@@ -12416,32 +12508,15 @@ namespace tsl {
                     // Process notification files every 300ms
                     {
                         std::lock_guard<std::mutex> jsonLock(notificationJsonMutex);
-                        //static u64 lastNotifCheck = 0;
-                    
+                        
                         if (armTicksToNs(nowTick - lastNotifCheck) >= 300'000'000ULL) {
                             lastNotifCheck = nowTick;
-                    
+                            
                             DIR* dir = opendir(ult::NOTIFICATIONS_PATH.c_str());
                             if (dir) {
                                 
                                 if (ult::useNotifications) {
-                                    std::string filename, fullPath, prioStr;
-                                    
-                                    struct dirent* entry;
-                                    
                                     const std::string& notifPath = ult::NOTIFICATIONS_PATH;
-                                    
-                                    //static std::vector<std::string> shownFiles;
-                                    
-                                    // Structure to hold file info with creation time
-                                    struct NotificationFile {
-                                        std::string filename;
-                                        std::string fullPath;
-                                        time_t creationTime;
-                                        int priority;
-                                    };
-                                    
-                                    std::vector<NotificationFile> notificationFiles;
                                     
                                     // --- Prune missing files from shownFiles ---
                                     for (auto it = shownFiles.begin(); it != shownFiles.end();) {
@@ -12453,40 +12528,49 @@ namespace tsl {
                                         }
                                     }
                                     
-                                    //static std::string text;
-                                    //static int fontSize;
-                                    //static int priority;
+                                    // Reuse existing variables - track best file as we scan
+                                    static std::string bestFilename;
+                                    static std::string bestFullPath;
+                                    static time_t bestCreationTime;
+                                    static int bestPriority;
                                     
-                                    // --- Collect notification files with creation time ---
+                                    bestFilename.clear();
+                                    bestFullPath.clear();
+                                    bestPriority = -1;
+                                    bestCreationTime = 0;
+                                    bool foundAny = false;
+                                    
+                                    struct dirent* entry;
+                                    
+                                    // --- Find the best notification file in one pass ---
                                     while ((entry = readdir(dir)) != nullptr) {
                                         if (entry->d_type != DT_REG) continue;
                                         
-                                        filename = entry->d_name;
-                                        const size_t filenameLen = filename.size();
+                                        const char* fname = entry->d_name;
+                                        const size_t filenameLen = strlen(fname);
                                         
                                         // Must end with ".notify"
-                                        if (filenameLen <= 7 || filename.compare(filenameLen - 7, 7, ".notify") != 0)
+                                        if (filenameLen <= 7 || strcmp(fname + filenameLen - 7, ".notify") != 0)
                                             continue;
                                         
                                         // Skip if already shown
-                                        if (std::find(shownFiles.begin(), shownFiles.end(), filename) != shownFiles.end())
+                                        if (std::find(shownFiles.begin(), shownFiles.end(), fname) != shownFiles.end())
                                             continue;
                                         
                                         // --- Build path ---
-                                        fullPath.clear();
+                                        static std::string fullPath;
                                         fullPath = notifPath;
-                                        fullPath += filename;
+                                        fullPath += fname;
                                         
                                         // --- Get file creation/modification time ---
                                         struct stat fileStat;
-                                        time_t creationTime = 0;
+                                        creationTime = 0;
                                         if (stat(fullPath.c_str(), &fileStat) == 0) {
-                                            // Use modification time as creation time (more universally supported)
                                             creationTime = fileStat.st_mtime;
                                         }
                                         
                                         // --- Read priority from JSON ---
-                                        priority = 20; // default
+                                        priority = 20; // default (reuse existing variable)
                                         std::unique_ptr<ult::json_t, ult::JsonDeleter> root(
                                             ult::readJsonFromFile(fullPath), ult::JsonDeleter());
                                         if (root) {
@@ -12497,32 +12581,30 @@ namespace tsl {
                                             }
                                         }
                                         
-                                        // Add to collection
-                                        notificationFiles.push_back({filename, fullPath, creationTime, priority});
+                                        // --- Is this better than current best? ---
+                                        const bool isBetter = !foundAny || 
+                                                       (priority > bestPriority) ||
+                                                       (priority == bestPriority && creationTime < bestCreationTime);
+                                        
+                                        if (isBetter) {
+                                            bestFilename = fname;
+                                            bestFullPath = fullPath;
+                                            bestCreationTime = creationTime;
+                                            bestPriority = priority;
+                                            foundAny = true;
+                                        }
                                     }
                                     
                                     closedir(dir);
                                     
-                                    // --- Sort files by priority (higher first), then creation time (older first) ---
-                                    std::sort(notificationFiles.begin(), notificationFiles.end(),
-                                             [](const NotificationFile& a, const NotificationFile& b) {
-                                                 // Primary sort: Higher priority first
-                                                 if (a.priority != b.priority) {
-                                                     return a.priority > b.priority;
-                                                 }
-                                                 // Secondary sort: Older creation time first (FIFO within same priority)
-                                                 return a.creationTime < b.creationTime;
-                                             });
-                                    
-                                    // --- Process files in chronological order ---
-                                    for (const auto& notifFile : notificationFiles) {
-                                        // --- Load JSON (safe outside notification lock) ---
-                                        text = ult::getStringFromJsonFile(notifFile.fullPath, "text");
+                                    // --- Process the best file ---
+                                    if (foundAny) {
+                                        text = ult::getStringFromJsonFile(bestFullPath, "text");
                                         if (!text.empty()) {
-                                            fontSize = 28; // default
+                                            fontSize = 28; // default (reuse existing variable)
                                             
                                             std::unique_ptr<ult::json_t, ult::JsonDeleter> root(
-                                                ult::readJsonFromFile(notifFile.fullPath), ult::JsonDeleter());
+                                                ult::readJsonFromFile(bestFullPath), ult::JsonDeleter());
                                             if (root) {
                                                 cJSON* croot = reinterpret_cast<cJSON*>(root.get());
                                                 cJSON* fontSizeObj = cJSON_GetObjectItemCaseSensitive(croot, "font_size");
@@ -12533,18 +12615,18 @@ namespace tsl {
                                             
                                             // --- Show notification safely ---
                                             if (notification) {
-                                                notification->show(text, fontSize, notifFile.priority, notifFile.filename);
+                                                notification->show(text, fontSize, bestPriority, bestFilename);
                                             }
                                             
                                             // Mark file as shown
-                                            shownFiles.push_back(notifFile.filename);
+                                            shownFiles.push_back(bestFilename);
                                         }
                                     }
                                     
                                 } else {
                                     // --- Notifications disabled: delete all files ---
                                     struct dirent* entry;
-                                    std::string fullPath;
+                                    static std::string fullPath;
                                     
                                     while ((entry = readdir(dir)) != nullptr) {
                                         if (entry->d_type != DT_REG) continue;
@@ -12573,11 +12655,81 @@ namespace tsl {
                     if (ult::launchingOverlay.load(std::memory_order_acquire))
                         break;
 
+                    // Flush any pending rumble triggers when feedback is off
+                    if (!ult::useHapticFeedback) {
+                        triggerRumbleClick.exchange(false, std::memory_order_acq_rel);
+                        triggerRumbleDoubleClick.exchange(false, std::memory_order_acq_rel);
+                    } else {
+                        ult::checkAndReinitRumble();
+                        
+                        if (triggerRumbleDoubleClick.exchange(false)) {
+                            if (!ult::doubleClickActive.load(std::memory_order_acquire)) {
+                                ult::rumbleDoubleClick();
+                            }
+                            triggerRumbleClick.exchange(false);
+                        } else if (triggerRumbleClick.exchange(false)) {
+                            ult::rumbleClick();
+                        }
+                        
+                        //const u64 _nowNs = armTicksToNs(armGetSystemTick());
+
+                        ult::processRumbleStop(nowNs);
+                        ult::processRumbleDoubleClick(nowNs);
+                    }
+                    
+                    // Flush any pending sound triggers when effects are off
+
+                    if (ult::expandedMemory) {
+                        if (!ult::useSoundEffects || disableSound.load(std::memory_order_acquire)) {
+                            triggerNavigationSound.exchange(false, std::memory_order_acq_rel);
+                            triggerEnterSound.exchange(false, std::memory_order_acq_rel);
+                            triggerExitSound.exchange(false, std::memory_order_acq_rel);
+                            triggerWallSound.exchange(false, std::memory_order_acq_rel);
+                            triggerOnSound.exchange(false, std::memory_order_acq_rel);
+                            triggerOffSound.exchange(false, std::memory_order_acq_rel);
+                            triggerSettingsSound.exchange(false, std::memory_order_acq_rel);
+                            triggerMoveSound.exchange(false, std::memory_order_acq_rel);
+                        } else {
+                            if (reloadSoundCacheNow.exchange(false, std::memory_order_acq_rel)) {
+                                ult::AudioPlayer::reloadAllSounds();
+                            }
+
+                            if (triggerNavigationSound.exchange(false)) {
+                                ult::AudioPlayer::playNavigateSound();
+                            } else if (triggerEnterSound.exchange(false)) {
+                                ult::AudioPlayer::playEnterSound();
+                            } else if (triggerExitSound.exchange(false)) {
+                                ult::AudioPlayer::playExitSound();
+                            } else if (triggerWallSound.exchange(false)) {
+                                ult::AudioPlayer::playWallSound();
+                            } else if (triggerOnSound.exchange(false)) {
+                                ult::AudioPlayer::playOnSound();
+                            } else if (triggerOffSound.exchange(false)) {
+                                ult::AudioPlayer::playOffSound();
+                            } else if (triggerSettingsSound.exchange(false)) {
+                                ult::AudioPlayer::playSettingsSound();
+                            } else if (triggerMoveSound.exchange(false)) {
+                                ult::AudioPlayer::playMoveSound();
+                            }
+
+                            //if (clearSoundCacheNow.exchange(false, std::memory_order_acq_rel)) {
+                            //    //ult::AudioPlayer::unloadAllSounds(ult::AudioPlayer::SoundType::Wall);
+                            //    ult::AudioPlayer::unloadAllSounds({ult::AudioPlayer::SoundType::Wall});
+                            //    //ult::AudioPlayer::unloadAllSounds();
+                            //    //clearSoundCacheNow.store(false, std::memory_order_release);
+                            //    clearSoundCacheNow.notify_all();
+                            //}
+                        }
+                    }
+
+                    //else if (triggerNavigationSound.exchange(false)) {
+                    //    ult::AudioPlayer::playSlideSound();
+                    //}
                     
                     // Combine inputs from both controllers
                     const u64 kDown_p1 = padGetButtonsDown(&pad_p1);
-                    const u64 kDown_handheld = padGetButtonsDown(&pad_handheld);
                     const u64 kHeld_p1 = padGetButtons(&pad_p1);
+                    const u64 kDown_handheld = padGetButtonsDown(&pad_handheld);
                     const u64 kHeld_handheld = padGetButtons(&pad_handheld);
                     
                     shData->keysDown = kDown_p1 | kDown_handheld;
@@ -12814,7 +12966,7 @@ namespace tsl {
                                     eventClose(&captureButtonPressEvent);
 
                                     ult::launchingOverlay.store(true, std::memory_order_release);
-                                    tsl::setNextOverlay(ult::OVERLAY_PATH + "ovlmenu.ovl", "--direct");
+                                    tsl::setNextOverlay(ult::OVERLAY_PATH + "ovlmenu.ovl", "--direct --comboReturn");
                                     tsl::Overlay::get()->close();
                                     eventFire(&shData->comboEvent);
                                     launchComboHasTriggered.store(true, std::memory_order_release);
@@ -12827,7 +12979,7 @@ namespace tsl {
                                     finalArgs = modeArg;
                                 } else {
                                     // Only check overlay-specific launch args for non-ovlmenu entries
-                                    if (overlayFileName != "ovlmenu.ovl") {
+                                    if (overlayFileName.compare("ovlmenu.ovl") != 0) {
                                         // OPTIMIZED: Single INI read for both values
                                         auto overlaysIniData = ult::getParsedDataFromIniFile(ult::OVERLAYS_INI_FILEPATH);
                                         std::string useArgs = "";
@@ -12858,7 +13010,8 @@ namespace tsl {
                                     finalArgs += " --direct";
                                 }
         
-                                if (overlayFileName == "ovlmenu.ovl") {
+                                if (overlayFileName.compare("ovlmenu.ovl") == 0) {
+                                    finalArgs += " --comboReturn";
                                     ult::setIniFileValue(
                                         ult::ULTRAHAND_CONFIG_INI_PATH,
                                         ult::ULTRAHAND_PROJECT_NAME,
@@ -13013,6 +13166,8 @@ namespace tsl {
         
     
     static inline std::mutex setNextOverlayMutex;
+
+    static inline std::string nextOverlayName;
     static void setNextOverlay(const std::string& ovlPath, std::string origArgs) {
         std::lock_guard lk(setNextOverlayMutex);
         char buffer[512];
@@ -13021,6 +13176,8 @@ namespace tsl {
         
         // Store filename and copy it
         const std::string filenameStr = ult::getNameFromPath(ovlPath);
+        nextOverlayName = filenameStr;
+
         const char* filename = filenameStr.c_str();
         while (*filename && p < bufferEnd) *p++ = *filename++;
         if (p < bufferEnd) *p++ = ' ';
@@ -13059,12 +13216,6 @@ namespace tsl {
                     while (src < end && *src == ' ') src++; // Skip spaces
                     while (src < end && *src != ' ' && *src != '\0') src++; // Skip title ID
                 }
-                //else if (strncmp(src, "--promptDuration", 16) == 0) {
-                //    // skip any existing --promptDuration (we’ll re-add it)
-                //    src += 16;
-                //    while (src < end && *src == ' ') src++;
-                //    while (src < end && *src != ' ' && *src != '\0') src++;
-                //}
                 else {
                     // Copy unknown flag
                     while (src < end && *src != ' ' && p < bufferEnd) *p++ = *src++;
@@ -13098,18 +13249,6 @@ namespace tsl {
             const char* titleId = ult::lastTitleID.c_str();
             while (*titleId && p < bufferEnd) *p++ = *titleId++;
         }
-
-        // Add prompt duration
-        //{
-        //    const s64 duration = notification->remainingTime(); // nanoseconds left
-        //    if (duration > 0) {
-        //        const std::string promptArg = " --promptDuration " + std::to_string(duration);
-        //        if ((p + promptArg.size()) < bufferEnd) {
-        //            memcpy(p, promptArg.c_str(), promptArg.size());
-        //            p += promptArg.size();
-        //        }
-        //    }
-        //}
         
         // Safety check - if we're at the end, we might have truncated
         if (p >= bufferEnd) {
@@ -13135,7 +13274,9 @@ namespace tsl {
         {"skipCombo", 9, 2},
         {"lastTitleID", 11, 3}, 
         {"foregroundFix", 13, 4},
-        {"package", 7, 5}
+        {"package", 7, 5},
+        {"lastSelectedItem", 16, 6},
+        {"comboReturn", 11, 7} // new option
     };
 
 
@@ -13163,7 +13304,7 @@ namespace tsl {
             ult::HEX_BUFFER_SIZE = 8192;
             ult::UNZIP_READ_BUFFER = 262144;
             ult::UNZIP_WRITE_BUFFER = 131072;
-            ult::DOWNLOAD_READ_BUFFER = 262144;
+            ult::DOWNLOAD_READ_BUFFER = 262144/2;
             ult::DOWNLOAD_WRITE_BUFFER = 131072;
         }
     
@@ -13175,19 +13316,7 @@ namespace tsl {
             bool skip;
             for (u8 arg = 1; arg < argc; arg++) {
                 const char* s = argv[arg];
-    //#if IS_STATUS_MONITOR_DIRECTIVE
-    //            if (s[0] == '-') {
-    //                if (s[1] == 'm') {
-    //                    if (strcasecmp(s, "-mini") == 0 || strcasecmp(s, "-micro") == 0) {
-    //                        isMiniOrMicroMode = true;
-    //                    }
-    //                } else if (s[1] == '-' && s[2] == 'm') {
-    //                    if (strcasecmp(s, "--miniOverlay") == 0 || strcasecmp(s, "--microOverlay") == 0) {
-    //                        isMiniOrMicroMode = true;
-    //                    }
-    //                }
-    //            }
-    //#endif
+
                 skip = false;
     
                 if (arg > 1) {
@@ -13232,18 +13361,20 @@ namespace tsl {
     
         bool skipCombo = false;
     #if IS_LAUNCHER_DIRECTIVE
+        bool comboReturn = false;
         bool directMode = true;
     #else
         bool directMode = false;
     #endif
         bool usingPackageLauncher = false;
+        
     
         for (u8 arg = 0; arg < argc; arg++) {
             const char* s = argv[arg];
             if (s[0] != '-' || s[1] != '-') continue;
             const char* opt = s + 2;
     
-            for (u8 i = 0; i < 5; i++) {
+            for (u8 i = 0; i < 7; i++) { // now 6 instead of 5
                 if (memcmp(opt, options[i].name, options[i].len) == 0 && opt[options[i].len] == '\0') {
                     switch (options[i].action) {
                         case 1: // direct
@@ -13267,12 +13398,23 @@ namespace tsl {
                             break;
                         case 4: // foregroundFix
                             if (++arg < argc) {
-                                ult::resetForegroundCheck.store(ult::resetForegroundCheck.load(std::memory_order_acquire) ||
-                                                               (argv[arg][0] == '1'), std::memory_order_release);
+                                ult::resetForegroundCheck.store(
+                                    ult::resetForegroundCheck.load(std::memory_order_acquire) ||
+                                    (argv[arg][0] == '1'), std::memory_order_release);
                             }
                             break;
                         case 5: // package
                             usingPackageLauncher = true;
+                            break;
+                        case 6: // lastSelectedItem
+                            #if IS_STATUS_MONITOR_DIRECTIVE
+                            lastMode = "returning";
+                            #endif
+                            break;
+                        case 7: // comboReturn
+                            #if IS_LAUNCHER_DIRECTIVE
+                            comboReturn = true;
+                            #endif
                             break;
                     }
                 }
@@ -13298,13 +13440,25 @@ namespace tsl {
     #if !IS_LAUNCHER_DIRECTIVE
         tsl::initializeUltrahandSettings();
     #endif
+
+        // Initialize the audio service
+        if (ult::useSoundEffects && ult::expandedMemory) {
+            ult::AudioPlayer::initialize();
+        }
+
+
+
         overlay->initScreen();
         overlay->changeTo(overlay->loadInitialGui());
-    
+        
+
+         bool shouldFireEvent = false;
+
     #if IS_LAUNCHER_DIRECTIVE
+       
         {
             bool inOverlay;
-            bool shouldFireEvent = false;
+            
             auto configData = ult::getParsedDataFromIniFile(ult::ULTRAHAND_CONFIG_INI_PATH);
             bool needsUpdate = false;
     
@@ -13338,6 +13492,7 @@ namespace tsl {
     #else
         if (skipCombo) {
             eventFire(&shData.comboEvent);
+            shouldFireEvent = true;
         }
     #endif
     
@@ -13383,8 +13538,7 @@ namespace tsl {
                             overlay->loop(true); // Draw prompts while hidden
                         }
     
-                        if (mainComboHasTriggered.load(std::memory_order_acquire)) {
-                            mainComboHasTriggered.store(false, std::memory_order_acquire);
+                        if (mainComboHasTriggered.exchange(false, std::memory_order_acq_rel)) {
                             comboBreakout = true;
                             exitAfterPrompt = false;
                             break;
@@ -13415,11 +13569,12 @@ namespace tsl {
                             shData.running.store(false, std::memory_order_release);
                             shData.overlayOpen.store(false, std::memory_order_release);
                             ult::launchingOverlay.store(true, std::memory_order_release);
+                            launchComboHasTriggered.store(true, std::memory_order_release); // for isolating sound effect
     
                             if (usingPackageLauncher || directMode) {
                                 tsl::setNextOverlay(ult::OVERLAY_PATH + "ovlmenu.ovl");
                             }
-    
+                            
                             hlp::requestForeground(false);
                             break;
                         }
@@ -13447,8 +13602,17 @@ namespace tsl {
                     overlay->show();
                     if (!comboBreakout && !(notification && notification->isActive()))
                         overlay->clearScreen();
+
+                    {
+                        std::scoped_lock lock(shData.dataMutex);
+                        // Clear derived states that the overlay loop will use
+                        shData.keysDown = 0;
+                        shData.keysHeld = 0;
+                        // Clear any queued pending keys so nothing gets processed one frame late
+                        shData.keysDownPending = 0;
+                    }
                 }
-    
+                
                 while (shData.running.load(std::memory_order_acquire)) {
                     {
                         
@@ -13465,6 +13629,37 @@ namespace tsl {
                             }
                             shData.keysDownPending = 0;
                         }
+                        #if IS_LAUNCHER_DIRECTIVE
+                        if (shouldFireEvent) {
+                            shouldFireEvent = false;
+                            
+                            if (!comboReturn) {
+                                //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                                //triggerExitSound.store(true, std::memory_order_release);
+                                triggerExitFeedback();
+                            //} else {
+                            //    triggerRumbleClick.store(true, std::memory_order_release);
+                            }
+                        }
+                        #else
+                        if (!directMode && shouldFireEvent) {
+                            shouldFireEvent = false;
+                            #if IS_STATUS_MONITOR_DIRECTIVE
+                            if (lastMode.compare("returning") == 0) {
+                                //triggerRumbleDoubleClick.store(true, std::memory_order_release);
+                                //triggerExitSound.store(true, std::memory_order_release);
+                                triggerExitFeedback();
+                            } else {
+                                //triggerRumbleClick.store(true, std::memory_order_release);
+                                triggerEnterSound.store(true, std::memory_order_release);
+                            }
+                            #else
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerEnterSound.store(true, std::memory_order_release);
+                            triggerEnterFeedback();
+                            #endif
+                        }
+                        #endif
                     }
     
     #if IS_STATUS_MONITOR_DIRECTIVE
@@ -13497,6 +13692,7 @@ namespace tsl {
                         //std::scoped_lock lock(shData.dataMutex);
                         shData.running.store(false, std::memory_order_release);
                         shData.overlayOpen.store(false, std::memory_order_release);
+
                         break;
                     }
                 }
@@ -13513,20 +13709,13 @@ namespace tsl {
                     eventClear(&shData.comboEvent);
                 }
             }
-            //if (notification)
-            //    notification->forceShutdown();
-    
-            //while (notification && notification->isActive()) {
-            //    notification->update(true, true); // No file ops, allow state transitions
-            //    svcSleepThread(10'000'000); // 1ms sleep
-            //}
-            //tsl::notificationGeneration.fetch_add(1, std::memory_order_release);
 
             // Ensure background thread is fully stopped before overlay cleanup
             shData.running.store(false, std::memory_order_release);
             threadWaitForExit(&backgroundThread);
             threadClose(&backgroundThread);
 
+            
             // Cleanup overlay resources
             tsl::elm::fullDeconstruction.store(true, std::memory_order_release);
             hlp::requestForeground(false);
@@ -13534,22 +13723,18 @@ namespace tsl {
             overlay->exitServices();
             delete overlay;
             
-            // Synchronize notification shutdown
-           //if (notification) {
-           //    notification->forceShutdown(); // Immediate disable of new notifications
-           //    while (notification->isActive()) {
-           //        notification->update(true, true); // No file ops, allow state transitions
-           //        svcSleepThread(1'000'000); // 1ms sleep
-           //    }
-           //    
-           //    notificationGeneration.fetch_add(1, std::memory_order_release);
-           //    delete notification;
-           //    
-           //    //lock.unlock();
-           //}
-
             
             eventClose(&shData.comboEvent);
+
+
+            if (directMode && !launchComboHasTriggered.load(std::memory_order_acquire)) {
+                if (!disableSound.load(std::memory_order_acquire) && ult::useSoundEffects)
+                    ult::AudioPlayer::playExitSound();
+                if (ult::useHapticFeedback) {
+                    ult::rumbleDoubleClickStandalone();
+                }
+            }
+
             
             // Brief delay to ensure thread quiescence before nx-ovlloader transition
             //svcSleepThread(100'000'000); // 100ms
@@ -13559,8 +13744,6 @@ namespace tsl {
     }
 
 }
-
-
 
 
 #ifdef TESLA_INIT_IMPL
@@ -13590,37 +13773,43 @@ extern "C" {
      *
      */
     void __appInit(void) {
-        tsl::hlp::doWithSmSession([]{
-            
-            ASSERT_FATAL(fsInitialize());
-            ASSERT_FATAL(hidInitialize());                          // Controller inputs and Touch
-            if (hosversionAtLeast(16,0,0)) {
-                ASSERT_FATAL(plInitialize(PlServiceType_User));     // Font data. Use pl:u for 16.0.0+
-            } else {
-                ASSERT_FATAL(plInitialize(PlServiceType_System));   // Use pl:s for 15.0.1 and below to prevent qlaunch/overlaydisp session exhaustion
-            }
-            ASSERT_FATAL(pmdmntInitialize());                       // PID querying
-            ASSERT_FATAL(hidsysInitialize());                       // Focus control
-            ASSERT_FATAL(setsysInitialize());                       // Settings querying
-            
-            // Time initializations
-            ASSERT_FATAL(timeInitialize()); // CUSTOM MODIFICATION
-            __libnx_init_time();            // CUSTOM MODIFICATION
-            timeExit(); // CUSTOM MODIFICATION
-
-            #if USING_WIDGET_DIRECTIVE
-            ult::powerInit();
-            i2cInitialize();
-            #endif
-
-            fsdevMountSdmc();
-            splInitialize();
-            spsmInitialize();
-            //i2cInitialize();
-            //ASSERT_FATAL(socketInitializeDefault());
-            //ASSERT_FATAL(nifmInitialize(NifmServiceType_User));
-        });
         ASSERT_FATAL(smInitialize()); // needed to prevent issues with powering device into sleep
+
+        //tsl::hlp::doWithSmSession([]{
+        
+        ASSERT_FATAL(fsInitialize());
+        ASSERT_FATAL(hidInitialize());                          // Controller inputs and Touch
+        if (hosversionAtLeast(16,0,0)) {
+            ASSERT_FATAL(plInitialize(PlServiceType_User));     // Font data. Use pl:u for 16.0.0+
+        } else {
+            ASSERT_FATAL(plInitialize(PlServiceType_System));   // Use pl:s for 15.0.1 and below to prevent qlaunch/overlaydisp session exhaustion
+        }
+        ASSERT_FATAL(pmdmntInitialize());                       // PID querying
+        ASSERT_FATAL(hidsysInitialize());                       // Focus control
+        ASSERT_FATAL(setsysInitialize());                       // Settings querying
+        
+        // Time initializations
+        if R_SUCCEEDED(timeInitialize()) {
+            __libnx_init_time();
+            timeExit();
+        }
+
+        #if USING_WIDGET_DIRECTIVE
+        ult::powerInit();
+        i2cInitialize();
+        #endif
+
+        fsdevMountSdmc();
+        splInitialize();
+        spsmInitialize();
+        //i2cInitialize();
+        //ASSERT_FATAL(socketInitializeDefault());
+        //ASSERT_FATAL(nifmInitialize(NifmServiceType_User));
+
+        //});
+        
+
+        
 
         #if IS_STATUS_MONITOR_DIRECTIVE
         Service *plSrv = plGetServiceSession();
@@ -13643,7 +13832,11 @@ extern "C" {
         delete tsl::notification;
         eventClose(&tsl::notificationEvent);
 
-        smExit();
+        //deinitRumble();
+        if (ult::expandedMemory)
+            ult::AudioPlayer::exit();
+
+        
         //socketExit();
         //nifmExit();
         spsmExit();
@@ -13661,6 +13854,7 @@ extern "C" {
         pmdmntExit();
         hidsysExit();
         setsysExit();
+        smExit();
 
         // Final cleanup
         tsl::gfx::FontManager::cleanup();

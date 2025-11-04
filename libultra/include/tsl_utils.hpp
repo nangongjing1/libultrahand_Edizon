@@ -140,6 +140,8 @@ namespace ult {
     extern bool useSwipeToOpen;
     extern bool useLaunchCombos;
     extern bool useNotifications;
+    extern bool useSoundEffects;
+    extern bool useHapticFeedback;
     extern bool usePageSwap;
     extern std::atomic<bool> noClickableItems;
 
@@ -408,6 +410,8 @@ namespace ult {
 
     extern std::string LAUNCH_COMBOS;
     extern std::string NOTIFICATIONS;
+    extern std::string SOUND_EFFECTS;
+    extern std::string HAPTIC_FEEDBACK;
     extern std::string OPAQUE_SCREENSHOTS;
 
     extern std::string PACKAGE_INFO;
