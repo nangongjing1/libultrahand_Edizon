@@ -3839,33 +3839,59 @@ namespace tsl {
              * @brief End the current frame
              * @warning Don't call this before calling \ref startFrame once
              */
+            //inline void endFrame() {
+            //#if IS_STATUS_MONITOR_DIRECTIVE
+            //    if (isRendering) {
+            //        static u32 lastFPS = 0;
+            //        static u64 cachedIntervalNs = 1000000000ULL / 60; // Default to 60 FPS
+            //
+            //        u32 fps = TeslaFPS;
+            //        if (__builtin_expect(fps != lastFPS, 0)) {
+            //            cachedIntervalNs = (fps > 0) ? (1000000000ULL / fps) : cachedIntervalNs;
+            //            lastFPS = fps;
+            //        }
+            //
+            //        // Frame pacing before VSync
+            //        leventWait(&renderingStopEvent, cachedIntervalNs);
+            //    }
+            //#endif
+            //
+            //    // Then hardware sync
+            //    this->waitForVSync();
+            //    framebufferEnd(&this->m_framebuffer);
+            //    this->m_currentFramebuffer = nullptr;
+            //
+            //    if (tsl::clearGlyphCacheNow.exchange(false)) {
+            //        tsl::gfx::FontManager::clearCache();
+            //    }
+            //}
+
             inline void endFrame() {
             #if IS_STATUS_MONITOR_DIRECTIVE
                 if (isRendering) {
                     static u32 lastFPS = 0;
-                    static u64 cachedIntervalNs = 1000000000ULL / 60; // Default to 60 FPS
-            
+                    static u64 cachedIntervalNs = 1000000000ULL / 60;
+                    
                     u32 fps = TeslaFPS;
                     if (__builtin_expect(fps != lastFPS, 0)) {
                         cachedIntervalNs = (fps > 0) ? (1000000000ULL / fps) : cachedIntervalNs;
                         lastFPS = fps;
                     }
-            
-                    // Frame pacing before VSync
+                    
+                    // Just wait - touch thread will signal if needed
                     leventWait(&renderingStopEvent, cachedIntervalNs);
                 }
             #endif
             
-                // Then hardware sync
                 this->waitForVSync();
                 framebufferEnd(&this->m_framebuffer);
                 this->m_currentFramebuffer = nullptr;
             
-                if (tsl::clearGlyphCacheNow.exchange(false)) {
+                if (tsl::clearGlyphCacheNow.exchange(false, std::memory_order_acq_rel)) {
                     tsl::gfx::FontManager::clearCache();
                 }
             }
-
+            
 
         };
 
@@ -4920,7 +4946,7 @@ namespace tsl {
             #endif
                 
                 renderer->drawString(renderTitle, false, 20, 52-2, 32, (defaultOverlayColor));
-                renderer->drawString(renderSubtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
+                renderer->drawString(renderSubtitle, false, 20, y+2+23, 15, (bannerVersionTextColor));
                 
                 // Update top cache after rendering for next frame
                 g_cachedTop.title = m_title;
@@ -5238,7 +5264,7 @@ namespace tsl {
                 const std::string& renderSubtitle = useCachedTop ? g_cachedTop.subtitle : m_subtitle;
                 
                 renderer->drawString(renderTitle, false, 20, 50, 32, (defaultOverlayColor));
-                renderer->drawString(renderSubtitle, false, 20, y+2+23+2, 15, (bannerVersionTextColor));
+                renderer->drawString(renderSubtitle, false, 20, y+2+23, 15, (bannerVersionTextColor));
                 
                 if (FullMode == true)
                     renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(bottomSeparatorColor));
@@ -8292,7 +8318,7 @@ namespace tsl {
                         this->setState(this->m_state);
                     
                     this->m_stateChangedListener(this->m_state);
-                    
+                    this->triggerClickAnimation();
                     
                     return true;
                 }
@@ -13452,7 +13478,7 @@ namespace tsl {
         overlay->changeTo(overlay->loadInitialGui());
         
 
-         bool shouldFireEvent = false;
+        bool shouldFireEvent = false;
 
     #if IS_LAUNCHER_DIRECTIVE
        
@@ -13490,6 +13516,22 @@ namespace tsl {
             }
         }
     #else
+        {
+            
+            auto configData = ult::getParsedDataFromIniFile(ult::ULTRAHAND_CONFIG_INI_PATH);
+
+            auto projectIt = configData.find(ult::ULTRAHAND_PROJECT_NAME);
+            if (projectIt != configData.end()) {
+                auto overlayIt = projectIt->second.find(ult::IN_OVERLAY_STR);
+                const bool inOverlay = (overlayIt == projectIt->second.end() || overlayIt->second != ult::FALSE_STR);
+
+                if (inOverlay && directMode) {
+                    configData[ult::ULTRAHAND_PROJECT_NAME][ult::IN_OVERLAY_STR] = ult::FALSE_STR;
+                    ult::saveIniFileData(ult::ULTRAHAND_CONFIG_INI_PATH, configData);
+                }
+            }
+        }
+
         if (skipCombo) {
             eventFire(&shData.comboEvent);
             shouldFireEvent = true;
