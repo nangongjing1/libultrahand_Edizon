@@ -54,39 +54,39 @@
 #include <map>
 #include <barrier>
 
-#ifndef APPROXIMATE_cos
-// Approximation for cos(x) using Taylor series around 0
-#define APPROXIMATE_cos(x)       (1 - (x) * (x) / 2 + (x) * (x) * (x) * (x) / 24)  // valid for small x
-#endif
-
-
-#ifndef APPROXIMATE_ifloor
-#define APPROXIMATE_ifloor(x)   ((int)((x) >= 0 ? (x) : (x) - 1))  // truncate toward negative infinity
-#define APPROXIMATE_iceil(x)    ((int)((x) == (int)(x) ? (x) : ((x) > 0 ? (int)(x) + 1 : (int)(x))))  // truncate toward positive infinity
-#endif
-
-#ifndef APPROXIMATE_sqrt
-// Fast approximation for sqrt using Newton's method
-#define APPROXIMATE_sqrt(x)     ((x) <= 0 ? 0 : (x) / 2.0 * (3.0 - ((x) * (x) * 0.5)))  // Approximation for x close to 1
-#define APPROXIMATE_pow(x, y)   ((y) == 0 ? 1 : ((y) == 1 ? (x) : APPROXIMATE_sqrt(x))) // limited to approximate sqrt if y=0.5
-#endif
-
-#ifndef APPROXIMATE_fmod
-#define APPROXIMATE_fmod(x, y)    ((x) - ((int)((x) / (y)) * (y)))  // equivalent to x - floor(x/y) * y
-#endif
-
-#ifndef APPROXIMATE_cos
-// Approximation for cos(x) using Taylor series around 0
-#define APPROXIMATE_cos(x)       (1 - (x) * (x) / 2 + (x) * (x) * (x) * (x) / 24)  // valid for small x
-#endif
-
-#ifndef APPROXIMATE_acos
-#define APPROXIMATE_acos(x)      (1.5708 - (x) - (x)*(x)*(x) / 6)  // limited approximation for acos in range [-1, 1]
-#endif
-
-#ifndef APPROXIMATE_fabs
-#define APPROXIMATE_fabs(x)      ((x) < 0 ? -(x) : (x))
-#endif
+//#ifndef APPROXIMATE_cos
+//// Approximation for cos(x) using Taylor series around 0
+//#define APPROXIMATE_cos(x)       (1 - (x) * (x) / 2 + (x) * (x) * (x) * (x) / 24)  // valid for small x
+//#endif
+//
+//
+//#ifndef APPROXIMATE_ifloor
+//#define APPROXIMATE_ifloor(x)   ((int)((x) >= 0 ? (x) : (x) - 1))  // truncate toward negative infinity
+//#define APPROXIMATE_iceil(x)    ((int)((x) == (int)(x) ? (x) : ((x) > 0 ? (int)(x) + 1 : (int)(x))))  // truncate toward positive infinity
+//#endif
+//
+//#ifndef APPROXIMATE_sqrt
+//// Fast approximation for sqrt using Newton's method
+//#define APPROXIMATE_sqrt(x)     ((x) <= 0 ? 0 : (x) / 2.0 * (3.0 - ((x) * (x) * 0.5)))  // Approximation for x close to 1
+//#define APPROXIMATE_pow(x, y)   ((y) == 0 ? 1 : ((y) == 1 ? (x) : APPROXIMATE_sqrt(x))) // limited to approximate sqrt if y=0.5
+//#endif
+//
+//#ifndef APPROXIMATE_fmod
+//#define APPROXIMATE_fmod(x, y)    ((x) - ((int)((x) / (y)) * (y)))  // equivalent to x - floor(x/y) * y
+//#endif
+//
+//#ifndef APPROXIMATE_cos
+//// Approximation for cos(x) using Taylor series around 0
+//#define APPROXIMATE_cos(x)       (1 - (x) * (x) / 2 + (x) * (x) * (x) * (x) / 24)  // valid for small x
+//#endif
+//
+//#ifndef APPROXIMATE_acos
+//#define APPROXIMATE_acos(x)      (1.5708 - (x) - (x)*(x)*(x) / 6)  // limited approximation for acos in range [-1, 1]
+//#endif
+//
+//#ifndef APPROXIMATE_fabs
+//#define APPROXIMATE_fabs(x)      ((x) < 0 ? -(x) : (x))
+//#endif
 
 struct OverlayCombo {
     std::string path;   // full overlay path
@@ -99,6 +99,33 @@ struct SwapDepth {
 };
 
 namespace ult {
+    // math funcs
+    inline double cos(double x) {
+      static constexpr double PI = 3.14159265358979323846;
+      static constexpr double TWO_PI = 6.28318530717958647692;
+      static constexpr double HALF_PI = 1.57079632679489661923;
+      
+      // Fast normalization using multiply instead of divide when possible
+      x = x - TWO_PI * static_cast<int>(x * 0.159154943091895); // 1/(2π)
+      if (x < 0) x += TWO_PI;
+      
+      // Use symmetry to reduce range
+      int sign = 1;
+      if (x > PI) {
+         x -= PI;
+         sign = -1;
+      }
+      if (x > HALF_PI) {
+         x = PI - x;
+         sign = -sign;
+      }
+      
+      // Horner's method for faster polynomial evaluation (fewer operations)
+      // 5-term minimax polynomial for [0, π/2] - accurate to ~10^-8
+      const double x2 = x * x;
+      return sign * (1.0 + x2 * (-0.5 + x2 * (0.04166666666666666 + x2 * (-0.001388888888888889 + x2 * (0.0000248015873015873 - x2 * 0.0000002755731922398589)))));
+   }
+
     extern bool correctFrameSize; // for detecting the correct Overlay display size
 
     extern u16 DefaultFramebufferWidth;            ///< Width of the framebuffer
@@ -182,6 +209,9 @@ namespace ult {
     extern std::atomic<float> selectWidth;
     extern std::atomic<float> nextPageWidth;
     extern std::atomic<bool> inMainMenu;
+    extern std::atomic<bool> inHiddenMode;
+    extern std::atomic<bool> inSettingsMenu;
+    extern std::atomic<bool> inSubSettingsMenu;
     extern std::atomic<bool> inOverlaysPage;
     extern std::atomic<bool> inPackagesPage;
     
@@ -314,8 +344,8 @@ namespace ult {
 
     extern std::atomic<bool> languageWasChanged;
     
-    inline constexpr double _M_PI = 3.14159265358979323846;  // For double precision
-    inline constexpr double RAD_TO_DEG = 180.0f / _M_PI;
+    inline constexpr double M_PI = 3.14159265358979323846;  // For double precision
+    inline constexpr double RAD_TO_DEG = 180.0f / M_PI;
     
     #if IS_LAUNCHER_DIRECTIVE
     extern std::string ENGLISH;
@@ -567,7 +597,7 @@ namespace ult {
     
     
     
-    float calculateAmplitude(float x, float peakDurationFactor = 0.25f);
+    //float calculateAmplitude(float x, float peakDurationFactor = 0.25f);
             
     
     extern std::atomic<bool> refreshWallpaperNow;

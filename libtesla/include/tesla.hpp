@@ -135,11 +135,11 @@ struct KeyPairEqual {
 
 u8 TeslaFPS = 60;
 //u8 alphabackground = 0xD;
-volatile bool triggerExitNow = false;
-volatile bool isRendering = false;
-volatile bool delayUpdate = false;
-volatile bool pendingExit = false;
-volatile bool wasRendering = false;
+std::atomic<bool> triggerExitNow{false};
+std::atomic<bool> isRendering{false};
+std::atomic<bool> delayUpdate{false};
+std::atomic<bool> pendingExit{false};
+std::atomic<bool> wasRendering{false};
 
 LEvent renderingStopEvent;
 bool FullMode = true;
@@ -172,7 +172,7 @@ inline std::atomic<bool> jumpToBottom{false};
 inline std::atomic<bool> skipUp{false};
 inline std::atomic<bool> skipDown{false};
 inline u32 offsetWidthVar = 112;
-inline std::string g_overlayFilename;;
+//inline std::string g_overlayFilename;;
 inline std::string lastOverlayFilename;
 inline std::string lastOverlayMode;
 
@@ -1776,36 +1776,29 @@ namespace tsl {
                                               const u8 red[16], const u8 green[16], 
                                               const u8 blue[16], const u8 alpha[16], 
                                               const s32 count) {
-                // All variables moved outside the loop
-                const u16* framebuffer = static_cast<const u16*>(this->getCurrentFramebuffer());
-                u32 offset;
-                u8 currentAlpha;
-                u8 invAlpha;
-                Color src = {0}, end = {0};
-                u32 currentX;
+                Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
                 
                 for (s32 i = 0; i < count; ++i) {
                     // Early exit for transparent pixels
-                    currentAlpha = alpha[i];
-                    if (currentAlpha == 0)
+                    const u8 currentAlpha = alpha[i];
+                    if (currentAlpha == 0) [[unlikely]]
                         continue;
                     
-                    currentX = baseX + i;
-                    offset = this->getPixelOffset(currentX, baseY);
+                    const u32 offset = this->getPixelOffset(baseX + i, baseY);
                     if (offset == UINT32_MAX) [[unlikely]]
                         continue;
                     
-                    // Direct framebuffer access and color construction
-                    src = framebuffer[offset];
-                    invAlpha = 0xF - currentAlpha;
+                    // Direct framebuffer read
+                    const Color src = framebuffer[offset];
+                    const u8 invAlpha = 0xF - currentAlpha;
                     
-                    // Direct member assignment instead of constructor
-                    end.r = blendColor(src.r, red[i], currentAlpha);
-                    end.g = blendColor(src.g, green[i], currentAlpha);
-                    end.b = blendColor(src.b, blue[i], currentAlpha);
-                    end.a = (currentAlpha + (src.a * invAlpha >> 4));
-                    
-                    this->setPixelAtOffset(offset, end);
+                    // Direct framebuffer write - skip setPixelAtOffset call
+                    framebuffer[offset] = Color(
+                        blendColor(src.r, red[i], currentAlpha),
+                        blendColor(src.g, green[i], currentAlpha),
+                        blendColor(src.b, blue[i], currentAlpha),
+                        currentAlpha + ((src.a * invAlpha) >> 4)
+                    );
                 }
             }
 
@@ -2212,80 +2205,144 @@ namespace tsl {
                 s32 start_x, end_x;
             };
 
-            // Define processChunk as a static member function
-            // Optimized processRoundedRectChunk - assumes bounds checking done by caller
+            // Optimized processRoundedRectChunk - Same output, faster execution
             static void processRoundedRectChunk(Renderer* self, const s32 x, const s32 y, const s32 w, const s32 h, 
                                                const s32 radius, const Color& color, const s32 startRow, const s32 endRow) {
-                // Original rectangle bounds
-                const s32 orig_x = x, orig_y = y;
-                const s32 orig_x_end = x + w, orig_y_end = y + h;
+                const s32 x_end = x + w;
+                const s32 y_end = y + h;
                 
-                // Calculate clipping bounds
                 const s32 clip_x = std::max(0, x);
-                const s32 clip_x_end = std::min(static_cast<s32>(cfg::FramebufferWidth), x + w);
+                const s32 clip_x_end = std::min(static_cast<s32>(cfg::FramebufferWidth), x_end);
                 
-                // Use ORIGINAL coordinates to determine corner regions
-                const s32 orig_x_left = orig_x + radius, orig_x_right = orig_x_end - radius;
-                const s32 orig_y_top = orig_y + radius, orig_y_bottom = orig_y_end - radius;
-                const s32 r2 = radius * radius;
-                const u8 red = color.r, green = color.g, blue = color.b, alpha = color.a;
+                const s32 corner_x_left = x + radius;
+                const s32 corner_x_right = x_end - radius - 1;
+                const s32 corner_y_top = y + radius;
+                const s32 corner_y_bottom = y_end - radius - 1;
+                
+                const float r_float = static_cast<float>(radius);
+                const float r2_f = r_float * r_float;
+                const float aa_threshold = r2_f + 2.0f * r_float + 1.0f;
+                const u8 base_alpha = color.a;
             
+                // SIMD arrays - pre-filled once
                 alignas(64) u8 redArray[512], greenArray[512], blueArray[512], alphaArray[512];
-                for (s32 i = 0; i < 512; i += 8) {
-                    redArray[i] = redArray[i+1] = redArray[i+2] = redArray[i+3] = 
-                    redArray[i+4] = redArray[i+5] = redArray[i+6] = redArray[i+7] = red;
-                    greenArray[i] = greenArray[i+1] = greenArray[i+2] = greenArray[i+3] = 
-                    greenArray[i+4] = greenArray[i+5] = greenArray[i+6] = greenArray[i+7] = green;
-                    blueArray[i] = blueArray[i+1] = blueArray[i+2] = blueArray[i+3] = 
-                    blueArray[i+4] = blueArray[i+5] = blueArray[i+6] = blueArray[i+7] = blue;
-                    alphaArray[i] = alphaArray[i+1] = alphaArray[i+2] = alphaArray[i+3] = 
-                    alphaArray[i+4] = alphaArray[i+5] = alphaArray[i+6] = alphaArray[i+7] = alpha;
+                const uint8x16_t red_vec = vdupq_n_u8(color.r);
+                const uint8x16_t green_vec = vdupq_n_u8(color.g);
+                const uint8x16_t blue_vec = vdupq_n_u8(color.b);
+                const uint8x16_t alpha_vec = vdupq_n_u8(color.a);
+                
+                for (s32 i = 0; i < 512; i += 16) {
+                    vst1q_u8(&redArray[i], red_vec);
+                    vst1q_u8(&greenArray[i], green_vec);
+                    vst1q_u8(&blueArray[i], blue_vec);
+                    vst1q_u8(&alphaArray[i], alpha_vec);
                 }
                 
-                s32 orig_span_start, orig_span_end;
-                s32 dx;
-                for (s32 y_current = startRow; y_current < endRow; ++y_current) {
-                    // Skip if outside original rectangle bounds
-                    if (y_current < orig_y || y_current >= orig_y_end) continue;
+                for (s32 y_cur = startRow; y_cur < endRow; ++y_cur) {
+                    if (y_cur < y || y_cur >= y_end) continue;
                     
+                    // Determine corner region once per row
+                    const bool in_corner_rows = y_cur < corner_y_top || y_cur > corner_y_bottom;
                     
-                    
-                    if (y_current >= orig_y_top && y_current < orig_y_bottom) {
-                        // Middle section - full width
-                        orig_span_start = orig_x;
-                        orig_span_end = orig_x_end;
-                    } else {
-                        // Corner section
-                        const s32 dy_abs = (y_current < orig_y_top) ? (orig_y_top - y_current) : (y_current - orig_y_bottom);
-                        const s32 dy2 = dy_abs * dy_abs;
-                        if (dy2 > r2) continue;
-            
-                        // Compute dx using integer square root approximation
-                        dx = 0;
-                        const s32 t = r2 - dy2;
-                        while (dx * dx <= t) {
-                            dx++;
+                    if (!in_corner_rows) {
+                        // Pure middle section - fastest path
+                        const s32 span_start = std::max(x, clip_x);
+                        const s32 span_end = std::min(x_end, clip_x_end);
+                        
+                        if (span_start < span_end) {
+                            for (s32 xp = span_start; xp < span_end; xp += 512) {
+                                self->setPixelBlendDstBatch(xp, y_cur, redArray, greenArray, blueArray, alphaArray, 
+                                                           std::min(512, span_end - xp));
+                            }
                         }
-                        dx--; // Get the largest dx where dx^2 + dy2 <= r2
-            
-                        // Calculate the span for this row in the original rectangle
-                        orig_span_start = std::max(orig_x_left - dx, orig_x);
-                        orig_span_end = std::min(orig_x_right + dx, orig_x_end);
-                    }
-            
-                    // Clip the original span to visible bounds
-                    const s32 span_start = std::max(orig_span_start, clip_x);
-                    const s32 span_end = std::min(orig_span_end, clip_x_end);
-            
-                    if (span_start >= span_end) continue;
-            
-                    // Batch rendering
-                    for (s32 x_pos = span_start; x_pos < span_end; x_pos += 512) {
-                        self->setPixelBlendDstBatch(x_pos, y_current, redArray, greenArray, blueArray, alphaArray, std::min(512, span_end - x_pos));
+                    } else {
+                        // Corner rows - calculate dy once
+                        const float dy = (y_cur < corner_y_top) ? static_cast<float>(corner_y_top - y_cur) : 
+                                                                   static_cast<float>(y_cur - corner_y_bottom);
+                        const float dy_sq = dy * dy;
+                        
+                        // Early exit if beyond radius
+                        if (dy_sq > aa_threshold) continue;
+                        
+                        const s32 span_start = std::max(x, clip_x);
+                        const s32 span_end = std::min(x_end, clip_x_end);
+                        
+                        s32 xp = span_start;
+                        
+                        // Left corner/edge region
+                        if (xp <= corner_x_left) {
+                            const s32 left_end = std::min(corner_x_left + 1, span_end);
+                            
+                            for (; xp < left_end; ++xp) {
+                                const float dx = static_cast<float>(corner_x_left - xp);
+                                const float dist_sq = dx*dx + dy_sq;
+                                
+                                if (dist_sq <= r2_f) {
+                                    self->setPixelBlendDst(xp, y_cur, color);
+                                } else if (dist_sq <= aa_threshold) {
+                                    // Inline AA calculation
+                                    const float dx_half = dx - 0.5f;
+                                    const float dy_half = dy - 0.5f;
+                                    
+                                    float cov = 0.0f;
+                                    if (dx*dx + dy*dy <= r2_f) cov += 0.25f;
+                                    if (dx_half*dx_half + dy*dy <= r2_f) cov += 0.25f;
+                                    if (dx*dx + dy_half*dy_half <= r2_f) cov += 0.25f;
+                                    if (dx_half*dx_half + dy_half*dy_half <= r2_f) cov += 0.25f;
+                                    
+                                    const u8 aa = static_cast<u8>((base_alpha * static_cast<u8>(cov * 15.0f + 0.5f)) / 15);
+                                    if (aa > 0) {
+                                        Color c = color;
+                                        c.a = aa;
+                                        self->setPixelBlendDst(xp, y_cur, c);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Middle section - batch fast path
+                        const s32 mid_start = std::max(corner_x_left + 1, xp);
+                        const s32 mid_end = std::min(corner_x_right, span_end);
+                        
+                        if (mid_start < mid_end) {
+                            for (s32 batch_x = mid_start; batch_x < mid_end; batch_x += 512) {
+                                self->setPixelBlendDstBatch(batch_x, y_cur, redArray, greenArray, blueArray, alphaArray,
+                                                           std::min(512, mid_end - batch_x));
+                            }
+                            xp = mid_end;
+                        }
+                        
+                        // Right corner/edge region
+                        if (xp >= corner_x_right && xp < span_end) {
+                            for (; xp < span_end; ++xp) {
+                                const float dx = static_cast<float>(xp - corner_x_right);
+                                const float dist_sq = dx*dx + dy_sq;
+                                
+                                if (dist_sq <= r2_f) {
+                                    self->setPixelBlendDst(xp, y_cur, color);
+                                } else if (dist_sq <= aa_threshold) {
+                                    // Inline AA calculation
+                                    const float dx_half = dx - 0.5f;
+                                    const float dy_half = dy - 0.5f;
+                                    
+                                    float cov = 0.0f;
+                                    if (dx*dx + dy*dy <= r2_f) cov += 0.25f;
+                                    if (dx_half*dx_half + dy*dy <= r2_f) cov += 0.25f;
+                                    if (dx*dx + dy_half*dy_half <= r2_f) cov += 0.25f;
+                                    if (dx_half*dx_half + dy_half*dy_half <= r2_f) cov += 0.25f;
+                                    
+                                    const u8 aa = static_cast<u8>((base_alpha * static_cast<u8>(cov * 15.0f + 0.5f)) / 15);
+                                    if (aa > 0) {
+                                        Color c = color;
+                                        c.a = aa;
+                                        self->setPixelBlendDst(xp, y_cur, c);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-
 
 
             /**
@@ -2382,16 +2439,12 @@ namespace tsl {
                 }
             }
             
-                                    
+            
             inline void drawUniformRoundedRect(const s32 x, const s32 y, const s32 w, const s32 h, const Color& color) {
-                // Early exit for degenerate cases
-                //if (w <= 0 || h <= 0) return;
-                
                 // Calculate radius and bounds
                 const s32 radius = h >> 1;  // h / 2
-                //if (radius <= 0) return;
                 
-                // Get framebuffer bounds
+                // Get framebuffer bounds (if these are compile-time constants, mark them constexpr)
                 const s32 fb_width = cfg::FramebufferWidth;
                 const s32 fb_height = cfg::FramebufferHeight;
                 
@@ -2413,211 +2466,170 @@ namespace tsl {
                 // Choose drawing method based on alpha
                 const bool fullOpacity = (color.a == 0xF);
                 
-                // Pre-compute variables
-                s32 y_curr, x_curr;
-                s32 dy, dy_sq, x_offset_sq;
-                s32 x_offset, row_start, row_end;
-                //u32 pixel_offset;
+                // Cache for last computed x_offset (exploit vertical coherence)
+                s32 last_dy_abs = -1;
+                s32 cached_x_offset = 0;
                 
                 // Main drawing loop
-                for (y_curr = clip_top; y_curr < clip_bottom; ++y_curr) {
-                    dy = y_curr - center_y;
-                    dy_sq = dy * dy;
+                for (s32 y_curr = clip_top; y_curr < clip_bottom; ++y_curr) {
+                    const s32 dy = y_curr - center_y;
+                    const s32 dy_abs = (dy < 0) ? -dy : dy;
                     
-                    // Skip rows outside the shape
-                    if (dy_sq > radius_sq) continue;
+                    // Skip rows outside the shape (check before expensive sqrt)
+                    if (dy_abs > radius) continue;
                     
-                    // Calculate horizontal extent for this row
-                    x_offset_sq = radius_sq - dy_sq;
-                    
-                    // Fast integer square root with better rounding
-                    if (radius <= 32) {
-                        // Direct calculation for small values
-                        x_offset = 0;
-                        while (x_offset * x_offset <= x_offset_sq) {
-                            x_offset++;
-                        }
-                        // More intelligent step-back: only if we're significantly over
-                        // This reduces the "flat edge" appearance
-                        if (x_offset > 0) {
-                            s32 current_sq = x_offset * x_offset;
-                            s32 prev_sq = (x_offset - 1) * (x_offset - 1);
-                            // Only step back if we're closer to the previous value
-                            if (current_sq - x_offset_sq > x_offset_sq - prev_sq) {
-                                x_offset--;
-                            }
-                        }
+                    // Calculate x_offset (cache identical dy values using symmetry)
+                    s32 x_offset;
+                    if (dy_abs == last_dy_abs) {
+                        x_offset = cached_x_offset;
                     } else {
-                        // Newton's method for larger values (converges in ~4 iterations)
-                        x_offset = radius; // Initial guess
-                        for (int i = 0; i < 4; ++i) {
-                            x_offset = (x_offset + x_offset_sq / x_offset) >> 1;
+                        const s32 dy_sq = dy * dy;
+                        const s32 x_offset_sq = radius_sq - dy_sq;
+                        
+                        // Fast integer square root with original rounding logic
+                        if (radius <= 32) {
+                            x_offset = 0;
+                            while (x_offset * x_offset <= x_offset_sq) {
+                                x_offset++;
+                            }
+                            if (x_offset > 0) {
+                                const s32 current_sq = x_offset * x_offset;
+                                const s32 prev_sq = (x_offset - 1) * (x_offset - 1);
+                                if (current_sq - x_offset_sq > x_offset_sq - prev_sq) {
+                                    x_offset--;
+                                }
+                            }
+                        } else {
+                            x_offset = radius;
+                            for (int i = 0; i < 4; ++i) {
+                                x_offset = (x_offset + x_offset_sq / x_offset) >> 1;
+                            }
+                            while ((x_offset + 1) * (x_offset + 1) <= x_offset_sq) x_offset++;
+                            while (x_offset * x_offset > x_offset_sq) x_offset--;
                         }
-                        // Ensure we're close to the actual value
-                        while ((x_offset + 1) * (x_offset + 1) <= x_offset_sq) x_offset++;
-                        while (x_offset * x_offset > x_offset_sq) x_offset--;
+                        
+                        cached_x_offset = x_offset;
+                        last_dy_abs = dy_abs;
                     }
                     
-                    // Calculate row bounds
-                    row_start = rect_left - x_offset;
-                    row_end = rect_right + x_offset;
-                    
-                    // Clip to visible area
-                    row_start = std::max(row_start, clip_left);
-                    row_end = std::min(row_end, clip_right);
+                    // Calculate and clip row bounds
+                    const s32 row_start = std::max(rect_left - x_offset, clip_left);
+                    const s32 row_end = std::min(rect_right + x_offset, clip_right);
                     
                     if (row_start >= row_end) continue;
                     
                     // Draw the row
                     if (fullOpacity) {
-                        for (x_curr = row_start; x_curr < row_end; ++x_curr) {
-                    
+                        for (s32 x_curr = row_start; x_curr < row_end; ++x_curr) {
                             const u32 offset = this->getPixelOffset((u32)x_curr, (u32)y_curr);
-                            if (offset == UINT32_MAX) continue;
-                    
-                            this->setPixelAtOffset(offset, color);
+                            if (offset != UINT32_MAX) {
+                                this->setPixelAtOffset(offset, color);
+                            }
                         }
                     } else {
-                        for (x_curr = row_start; x_curr < row_end; ++x_curr) {
-                    
+                        for (s32 x_curr = row_start; x_curr < row_end; ++x_curr) {
                             const u32 offset = this->getPixelOffset((u32)x_curr, (u32)y_curr);
-                            if (offset == UINT32_MAX) continue;
-                    
-                            // you can keep using the existing blended helper which already checks UINT32_MAX
-                            this->setPixelBlendDst((u32)x_curr, (u32)y_curr, color);
+                            if (offset != UINT32_MAX) {
+                                this->setPixelBlendDst((u32)x_curr, (u32)y_curr, color);
+                            }
                         }
                     }
                 }
             }
                         
             // Struct for batch pixel processing with better alignment
-            struct alignas(64) PixelBatch {
-                s32 baseX, baseY;
-                u8 red[32], green[32], blue[32], alpha[32];  // Doubled for 32-pixel batches
-                s32 count;
-            };
-            
-            // Batch pixel setter - process multiple pixels at once if available
-            inline void setPixelBatchBlendSrc(const s32 baseX, const s32 baseY, const PixelBatch& batch) {
-                // If your graphics system supports batch operations, use them here
-                // Otherwise fall back to individual calls
-                for (s32 i = 0; i < batch.count; ++i) {
-                    setPixelBlendSrc(baseX + i, baseY, {
-                        batch.red[i], batch.green[i], batch.blue[i], batch.alpha[i]
-                    });
-                }
-            }
+            //struct alignas(64) PixelBatch {
+            //    s32 baseX, baseY;
+            //    u8 red[32], green[32], blue[32], alpha[32];  // Doubled for 32-pixel batches
+            //    s32 count;
+            //};
+            //
+            //// Batch pixel setter - process multiple pixels at once if available
+            //inline void setPixelBatchBlendSrc(const s32 baseX, const s32 baseY, const PixelBatch& batch) {
+            //    // If your graphics system supports batch operations, use them here
+            //    // Otherwise fall back to individual calls
+            //    for (s32 i = 0; i < batch.count; ++i) {
+            //        setPixelBlendSrc(baseX + i, baseY, {
+            //            batch.red[i], batch.green[i], batch.blue[i], batch.alpha[i]
+            //        });
+            //    }
+            //}
 
-            // Fixed compilation errors - simplified SIMD version
-            static constexpr uint8x16_t lut = {0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255};
+            // RGBA4444 processing - no expansion needed
             const uint8x16_t mask_low = vdupq_n_u8(0x0F);
-            // Pre-computed lookup table for 4-bit to 8-bit conversion
-            static constexpr u8 expand4to8[16] = {
-                0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255
-            };
             
-
             inline void processBMPChunk(const s32 x, const s32 y, const s32 screenW, const u8 *preprocessedData, 
-                                           const s32 startRow, const s32 endRow, const u8 globalAlphaLimit) {
-                const s32 bytesPerRow = screenW * 2;
-                const s32 endX16 = screenW & ~15;
-                
-                // Create SIMD vector for alpha limit
+                                       const s32 startRow, const s32 endRow, const u8 globalAlphaLimit) {
+                static constexpr s32 bytesPerRow = 448 * 2;
+                static constexpr s32 endX16 = 448 & ~15;
                 const uint8x16_t alpha_limit_vec = vdupq_n_u8(globalAlphaLimit);
                 
-                // Pre-declare all variables outside loops
-                const u8 *rowPtr;
-                s32 baseY;
-                s32 x1;
-                const u8* ptr;
-                uint8x16x2_t packed;
-                uint8x16_t high1, low1, high2, low2;
-                uint8x16_t red, green, blue, alpha;
-                alignas(16) u8 red_vals[16], green_vals[16], blue_vals[16], alpha_vals[16];
-                s32 baseX;
-                s32 pixelX;
-                u32 offset;
-                Color color = {0}, src = {0}, end = {0};
-                const u16* framebuffer;
-                u8 p1, p2;
+                // Get framebuffer once for entire chunk
+                Color* const framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
                 
                 for (s32 y1 = startRow; y1 < endRow; ++y1) {
-                    rowPtr = preprocessedData + (y1 * bytesPerRow);
-                    baseY = y + y1;
+                    const u8 *rowPtr = preprocessedData + (y1 * bytesPerRow);
+                    const s32 baseY = y + y1;
                     
-                    x1 = 0;
+                    s32 x1 = 0;
                     
                     // SIMD processing for 16 pixels at once
                     for (; x1 < endX16; x1 += 16) {
-                        ptr = rowPtr + (x1 << 1);
-                        packed = vld2q_u8(ptr);
+                        const u8* ptr = rowPtr + (x1 << 1);
                         
-                        // Expand 4-bit to 8-bit values
-                        high1 = vshrq_n_u8(packed.val[0], 4);
-                        low1  = vandq_u8(packed.val[0], mask_low);
-                        high2 = vshrq_n_u8(packed.val[1], 4);
-                        low2  = vandq_u8(packed.val[1], mask_low);
+                        // Load and unpack RGBA4444 data - keep as 4-bit
+                        uint8x16x2_t packed = vld2q_u8(ptr);
+                        uint8x16_t high1 = vshrq_n_u8(packed.val[0], 4);
+                        uint8x16_t low1  = vandq_u8(packed.val[0], mask_low);
+                        uint8x16_t high2 = vshrq_n_u8(packed.val[1], 4);
+                        uint8x16_t low2  = vminq_u8(vandq_u8(packed.val[1], mask_low), alpha_limit_vec);
                         
-                        red   = vqtbl1q_u8(lut, high1);
-                        green = vqtbl1q_u8(lut, low1);
-                        blue  = vqtbl1q_u8(lut, high2);
-                        alpha = vqtbl1q_u8(lut, low2);
+                        // Store results directly
+                        alignas(16) u8 red_vals[16], green_vals[16], blue_vals[16], alpha_vals[16];
+                        vst1q_u8(red_vals, high1);
+                        vst1q_u8(green_vals, low1); 
+                        vst1q_u8(blue_vals, high2);
+                        vst1q_u8(alpha_vals, low2);
                         
-                        // Apply alpha limit using SIMD min operation
-                        alpha = vminq_u8(alpha, alpha_limit_vec);
+                        const s32 baseX = x + x1;
                         
-                        // Store to arrays and process individually
-                        vst1q_u8(red_vals, red);
-                        vst1q_u8(green_vals, green); 
-                        vst1q_u8(blue_vals, blue);
-                        vst1q_u8(alpha_vals, alpha);
-                        
-                        baseX = x + x1;
-                        
-                        // Process 16 pixels with minimal function call overhead
+                        // Optimized pixel loop with direct framebuffer access
                         for (int i = 0; i < 16; ++i) {
-                            // Skip transparent pixels
-                            if (alpha_vals[i] == 0) continue;
+                            const u8 a = alpha_vals[i];
+                            if (a == 0) continue;
                             
-                            pixelX = baseX + i;
-                            offset = this->getPixelOffset(pixelX, baseY);
+                            const u32 offset = this->getPixelOffset(baseX + i, baseY);
+                            if (offset == UINT32_MAX) continue;
                             
-                            if (offset != UINT32_MAX) {
-                                color = {red_vals[i], green_vals[i], blue_vals[i], alpha_vals[i]};
-                                
-                                framebuffer = static_cast<const u16*>(this->getCurrentFramebuffer());
-                                src = Color(framebuffer[offset]);
-                                
-                                end = {
-                                    blendColor(src.r, color.r, color.a),
-                                    blendColor(src.g, color.g, color.a), 
-                                    blendColor(src.b, color.b, color.a),
-                                    src.a
-                                };
+                            const Color src = framebuffer[offset];
                             
-                                this->setPixelAtOffset(offset, end);
-                            }
+                            framebuffer[offset] = {
+                                blendColor(src.r, red_vals[i], a),
+                                blendColor(src.g, green_vals[i], a),
+                                blendColor(src.b, blue_vals[i], a),
+                                src.a
+                            };
                         }
                     }
                     
-                    // Handle remaining pixels (less than 16) with pre-computed alpha limit
+                    // Handle remaining pixels
                     for (; x1 < screenW; ++x1) {
-                        p1 = rowPtr[x1 << 1];
-                        p2 = rowPtr[(x1 << 1) + 1];
-                        
-                        u8 alpha = expand4to8[p2 & 0x0F];
-                        alpha = (alpha < globalAlphaLimit) ? alpha : globalAlphaLimit;
+                        const u8 p1 = rowPtr[x1 << 1];
+                        const u8 p2 = rowPtr[(x1 << 1) + 1];
+                        const u8 alpha = std::min(static_cast<u8>(p2 & 0x0F), globalAlphaLimit);
                         
                         setPixelBlendSrc(x + x1, baseY, {
-                            expand4to8[p1 >> 4], expand4to8[p1 & 0x0F],
-                            expand4to8[p2 >> 4], alpha
+                            static_cast<u8>(p1 >> 4),
+                            static_cast<u8>(p1 & 0x0F),
+                            static_cast<u8>(p2 >> 4),
+                            alpha
                         });
                     }
                 }
                 
                 ult::inPlotBarrier.arrive_and_wait();
             }
-
+            
 
             /**
              * @brief Draws a scaled RGBA8888 bitmap from memory
@@ -2723,10 +2735,12 @@ namespace tsl {
                 
                 const u8* __restrict__ src = bmp;
                 
-                s32 px;
-
+                // Pre-compute alpha limit once using global opacity
+                const u8 alphaLimit = static_cast<u8>(0xF * Renderer::s_opacity);
+                
                 // Completely unroll small bitmaps for maximum speed
                 if (w <= 8 && h <= 8) [[likely]] {
+                    s32 px;
                     // Specialized path for small bitmaps (icons, etc.)
                     for (s32 py = 0; py < h; ++py) {
                         const s32 rowY = y + py;
@@ -2746,76 +2760,86 @@ namespace tsl {
                         }
                         
                         pixel8: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel7: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel6: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel5: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel4: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel3: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel2: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px++, rowY, a(c)); src += 4;
                         }
                         pixel1: {
+                            u8 alpha = src[3] >> 4;
+                            alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                             const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
+                                           static_cast<u8>(src[2] >> 4), alpha};
                             setPixelBlendSrc(px, rowY, a(c)); src += 4;
                         }
                     }
                     return;
                 }
                 
-                // Fallback to vectorized version for larger bitmaps
-                const s32 vectorWidth = w & ~7; // Process 8 pixels at a time
-                const s32 remainder = w & 7;
-                
+                // Optimized scalar path for larger bitmaps
                 for (s32 py = 0; py < h; ++py) {
                     const s32 rowY = y + py;
-                    px = x;
+                    s32 px = x;
+                    const u8* rowEnd = src + (w * 4);
                     
-                    // Process 8 pixels at once (cache-friendly)
-                    for (s32 i = 0; i < vectorWidth; i += 8) {
-                        // Prefetch next cache line
-                        __builtin_prefetch(src + 64, 0, 3);
-                        
-                        // Process 8 pixels with minimal overhead
-                        for (int j = 0; j < 8; ++j) {
-                            const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                           static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
-                            setPixelBlendSrc(px++, rowY, (c));
-                            src += 4;
+                    // Prefetch first cache line
+                    __builtin_prefetch(src, 0, 3);
+                    
+                    // Process all pixels in the row
+                    while (src < rowEnd) {
+                        // Prefetch ahead every 16 pixels (64 bytes)
+                        if (((uintptr_t)src & 63) == 0) [[unlikely]] {
+                            __builtin_prefetch(src + 64, 0, 3);
                         }
-                    }
-                    
-                    // Handle remainder
-                    for (s32 i = 0; i < remainder; ++i) {
+                        
+                        u8 alpha = src[3] >> 4;
+                        alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
                         const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                       static_cast<u8>(src[2] >> 4), static_cast<u8>(src[3] >> 4)};
-                        setPixelBlendSrc(px++, rowY, (c));
+                                       static_cast<u8>(src[2] >> 4), alpha};
+                        setPixelBlendSrc(px++, rowY, c);
                         src += 4;
                     }
                 }
@@ -2852,41 +2876,39 @@ namespace tsl {
                                                   const std::vector<std::string>* specialSymbols = nullptr,
                                                   const u32 highlightStartChar = 0,
                                                   const u32 highlightEndChar = 0,
-                                                  const bool useNotificationCache = false) { // NEW parameter
+                                                  const bool useNotificationCache = false) {
                 
                 // Thread-safe translation cache access
-                std::string text;
-                #if defined(UI_OVERRIDE_PATH)// && (!defined(IS_STATUS_MONITOR) || (IS_STATUS_MONITOR == 0))
+                const std::string* text = &originalString;
+                std::string translatedText;
+                
+                #if defined(UI_OVERRIDE_PATH)
                 {
                     std::shared_lock<std::shared_mutex> readLock(s_translationCacheMutex);
                     auto translatedIt = ult::translationCache.find(originalString);
                     if (translatedIt != ult::translationCache.end()) {
-                        text = translatedIt->second;
-                    } else {
-                        // Don't insert anything, just fallback to original string
-                        text = originalString;
+                        translatedText = translatedIt->second;
+                        text = &translatedText;
                     }
                 }
-                #else
-                text = originalString;
                 #endif
                 
-                if (text.empty() || fontSize == 0) return {0, 0};
+                if (text->empty() || fontSize == 0) return {0, 0};
                 
                 const float maxWidthLimit = maxWidth > 0 ? x + maxWidth : std::numeric_limits<float>::max();
                 
-                // Check if highlighting is enabled (both highlight color and delimiters must be provided)
+                // Check if highlighting is enabled
                 const bool highlightingEnabled = highlightColor && highlightStartChar != 0 && highlightEndChar != 0;
                 
-                // Get font metrics for consistent line height using a standard character
-                // This ensures consistent line spacing regardless of which specific characters are used
+                // Get font metrics once
                 const auto fontMetrics = FontManager::getFontMetricsForCharacter('A', fontSize);
                 const s32 lineHeight = static_cast<s32>(fontMetrics.lineHeight);
                 
                 // Fast ASCII check with early exit
                 bool isAsciiOnly = true;
-                const char* textPtr = text.data();
-                const char* textEnd = textPtr + text.size();
+                const char* textPtr = text->data();
+                const char* textEnd = textPtr + text->size();
+                
                 for (const char* p = textPtr; p < textEnd; ++p) {
                     if (static_cast<unsigned char>(*p) > 127) {
                         isAsciiOnly = false;
@@ -2894,99 +2916,90 @@ namespace tsl {
                     }
                 }
                 
-                s32 maxX = x, currX = x, currY = y;  // Changed to s32 for consistency
-                s32 maxY = y + lineHeight;           // Initialize with at least one line height
+                s32 maxX = x, currX = x, currY = y;
+                s32 maxY = y + lineHeight;
                 bool inHighlight = false;
                 const Color* currentColor = &defaultColor;
                 
-                // Pre-declare variables used in loops to avoid repeated allocations
-                u32 currCharacter;
-                ssize_t codepointWidth;
-                std::shared_ptr<FontManager::Glyph> glyph;
-                bool symbolProcessed;
-                size_t remainingLength;
-                u32 symChar;
-                ssize_t symWidth;
-                size_t i;
-                
-                // Main processing loop with pointer arithmetic for ASCII optimization
+                // Main processing loop
                 if (isAsciiOnly && !specialSymbols) {
                     // Fast ASCII-only path
                     for (const char* p = textPtr; p < textEnd && currX < maxWidthLimit; ++p) {
-                        currCharacter = static_cast<u32>(*p);
+                        u32 currCharacter = static_cast<u32>(*p);
                         
-                        // Handle highlighting with configurable delimiters
+                        // Handle highlighting
                         if (highlightingEnabled) {
                             if (currCharacter == highlightStartChar) {
                                 inHighlight = true;
+                                currentColor = &defaultColor;
                             } else if (currCharacter == highlightEndChar) {
                                 inHighlight = false;
+                                currentColor = &defaultColor;
+                            } else {
+                                currentColor = inHighlight ? highlightColor : &defaultColor;
                             }
-                            currentColor = (currCharacter == highlightStartChar || currCharacter == highlightEndChar) ? 
-                                          &defaultColor : (inHighlight ? highlightColor : &defaultColor);
                         }
                         
                         // Handle newline
                         if (currCharacter == '\n') {
                             maxX = std::max(currX, maxX);
                             currX = x;
-                            currY += lineHeight;  // Use consistent line height
-                            maxY = std::max(maxY, currY + lineHeight);  // Update maxY for new line
+                            currY += lineHeight;
+                            maxY = std::max(maxY, currY + lineHeight);
                             continue;
                         }
                         
-                        // Get glyph (now thread-safe)
-                        // Get glyph - UPDATED to use notification cache when requested
-                        if (useNotificationCache) {
-                            glyph = FontManager::getOrCreateNotificationGlyph(currCharacter, monospace, fontSize);
-                        } else {
-                            glyph = FontManager::getOrCreateGlyph(currCharacter, monospace, fontSize);
-                        }
+                        // Get glyph
+                        std::shared_ptr<FontManager::Glyph> glyph = useNotificationCache ?
+                            FontManager::getOrCreateNotificationGlyph(currCharacter, monospace, fontSize) :
+                            FontManager::getOrCreateGlyph(currCharacter, monospace, fontSize);
+                        
                         if (!glyph) continue;
                         
-                        // Track maximum Y position reached using consistent line height
                         maxY = std::max(maxY, currY + lineHeight);
                         
                         // Render if needed
-                        if (draw && glyph->glyphBmp && currCharacter > 32) { // Space is 32
-                            renderGlyph(glyph, currX, currY, *currentColor);
+                        if (draw && glyph->glyphBmp && currCharacter > 32) {
+                            renderGlyph(glyph, currX, currY, *currentColor, useNotificationCache);
                         }
                         
                         currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
                     }
                 } else {
                     // UTF-8 path with special symbols support
-                    auto itStr = text.cbegin();
-                    const auto itStrEnd = text.cend();
+                    auto itStr = text->cbegin();
+                    const auto itStrEnd = text->cend();
                     
                     while (itStr != itStrEnd && currX < maxWidthLimit) {
                         // Check for special symbols first
-                        symbolProcessed = false;
+                        bool symbolProcessed = false;
+                        
                         if (specialSymbols) {
-                            remainingLength = itStrEnd - itStr;
+                            const size_t remainingLength = itStrEnd - itStr;
+                            
                             for (const auto& symbol : *specialSymbols) {
                                 if (remainingLength >= symbol.length() &&
                                     std::equal(symbol.begin(), symbol.end(), itStr)) {
                                     
                                     // Process special symbol
-                                    for (i = 0; i < symbol.length(); ) {
-                                        symWidth = decode_utf8(&symChar, 
+                                    for (size_t i = 0; i < symbol.length(); ) {
+                                        u32 symChar;
+                                        const ssize_t symWidth = decode_utf8(&symChar, 
                                             reinterpret_cast<const u8*>(&symbol[i]));
                                         if (symWidth <= 0) break;
                                         
                                         if (symChar == '\n') {
                                             maxX = std::max(currX, maxX);
                                             currX = x;
-                                            currY += lineHeight;  // Use consistent line height
-                                            maxY = std::max(maxY, currY + lineHeight);  // Update maxY for new line
+                                            currY += lineHeight;
+                                            maxY = std::max(maxY, currY + lineHeight);
                                         } else {
-                                            glyph = FontManager::getOrCreateGlyph(symChar, monospace, fontSize);
+                                            auto glyph = FontManager::getOrCreateGlyph(symChar, monospace, fontSize);
                                             if (glyph) {
-                                                // Track maximum Y position reached using consistent line height
                                                 maxY = std::max(maxY, currY + lineHeight);
                                                 
                                                 if (draw && glyph->glyphBmp && symChar > 32) {
-                                                    renderGlyph(glyph, currX, currY, *highlightColor);
+                                                    renderGlyph(glyph, currX, currY, *highlightColor, useNotificationCache);
                                                 }
                                                 currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
                                             }
@@ -3003,6 +3016,9 @@ namespace tsl {
                         if (symbolProcessed) continue;
                         
                         // Decode character
+                        u32 currCharacter;
+                        ssize_t codepointWidth;
+                        
                         if (isAsciiOnly) {
                             currCharacter = static_cast<u32>(*itStr);
                             codepointWidth = 1;
@@ -3013,36 +3029,37 @@ namespace tsl {
                         
                         itStr += codepointWidth;
                         
-                        // Handle highlighting with configurable delimiters
+                        // Handle highlighting
                         if (highlightingEnabled) {
                             if (currCharacter == highlightStartChar) {
                                 inHighlight = true;
+                                currentColor = &defaultColor;
                             } else if (currCharacter == highlightEndChar) {
                                 inHighlight = false;
+                                currentColor = &defaultColor;
+                            } else {
+                                currentColor = inHighlight ? highlightColor : &defaultColor;
                             }
-                            currentColor = (currCharacter == highlightStartChar || currCharacter == highlightEndChar) ? 
-                                          &defaultColor : (inHighlight ? highlightColor : &defaultColor);
                         }
                         
                         // Handle newline
                         if (currCharacter == '\n') {
                             maxX = std::max(currX, maxX);
                             currX = x;
-                            currY += lineHeight;  // Use consistent line height
-                            maxY = std::max(maxY, currY + lineHeight);  // Update maxY for new line
+                            currY += lineHeight;
+                            maxY = std::max(maxY, currY + lineHeight);
                             continue;
                         }
                         
-                        // Get glyph (now thread-safe)
-                        glyph = FontManager::getOrCreateGlyph(currCharacter, monospace, fontSize);
+                        // Get glyph
+                        auto glyph = FontManager::getOrCreateGlyph(currCharacter, monospace, fontSize);
                         if (!glyph) continue;
                         
-                        // Track maximum Y position reached using consistent line height
                         maxY = std::max(maxY, currY + lineHeight);
                         
                         // Render if needed
                         if (draw && glyph->glyphBmp && currCharacter > 32) {
-                            renderGlyph(glyph, currX, currY, *currentColor);
+                            renderGlyph(glyph, currX, currY, *currentColor, useNotificationCache);
                         }
                         
                         currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
@@ -3050,7 +3067,6 @@ namespace tsl {
                 }
                 
                 maxX = std::max(currX, maxX);
-                // Return consistent height based on proper font metrics
                 return {maxX - x, maxY - y};
             }
 
@@ -3266,14 +3282,14 @@ namespace tsl {
                 
                 // Draw separator and backdrop if showing any widget
                 if (showAnyWidget) {
-                    drawRect(239, 15 + 2 - 2, 1, 64 + 2, topSeparatorColor);
+                    drawRect(239, 15 + 2 - 2, 1, 64 + 2, aWithOpacity(topSeparatorColor));
                     if (!ult::hideWidgetBackdrop) {
                         drawUniformRoundedRect(
                             247, 15 + 2 - 2,
                             (ult::extendedWidgetBackdrop
                                 ? tsl::cfg::FramebufferWidth - 255
                                 : tsl::cfg::FramebufferWidth - 215),
-                            64 + 2, widgetBackdropColor
+                            64 + 2, a(widgetBackdropColor)
                         );
                     }
                 }
@@ -3462,15 +3478,15 @@ namespace tsl {
             }
             
             // Optimized glyph rendering
-            inline void renderGlyph(std::shared_ptr<FontManager::Glyph> glyph, float x, float y, const Color& color) {
-                if (!glyph->glyphBmp || color.a == 0) return;
+            inline void renderGlyph(std::shared_ptr<FontManager::Glyph> glyph, float x, float y, const Color& color, bool skipAlphaLimit = false) {
+                if (!glyph->glyphBmp || color.a == 0) [[unlikely]] return;
                 
                 const s32 xPos = static_cast<s32>(x + glyph->bounds[0]);
                 const s32 yPos = static_cast<s32>(y + glyph->bounds[1]);
                 
                 // Quick bounds check
                 if (xPos >= cfg::FramebufferWidth || yPos >= cfg::FramebufferHeight ||
-                    xPos + glyph->width <= 0 || yPos + glyph->height <= 0) return;
+                    xPos + glyph->width <= 0 || yPos + glyph->height <= 0) [[unlikely]] return;
                 
                 // Calculate clipping
                 const s32 startX = std::max(0, -xPos);
@@ -3478,48 +3494,33 @@ namespace tsl {
                 const s32 endX = std::min(glyph->width, static_cast<s32>(cfg::FramebufferWidth) - xPos);
                 const s32 endY = std::min(glyph->height, static_cast<s32>(cfg::FramebufferHeight) - yPos);
                 
-                // Move variable declarations outside loops
-                const s32 simdEnd = std::min(endX, (startX + 7) & ~7);
-                s32 bmpX;
-                uint8_t alpha;
-                s32 pixelX;
-                //Color tmpColor = {0};
+                // Pre-compute alpha limit once using global opacity
+                const u8 alphaLimit = skipAlphaLimit ? 0xF : static_cast<u8>(0xF * Renderer::s_opacity);
                 
-                // Render with optimized inner loop
+                // Render scanline by scanline
                 const uint8_t* bmpPtr = glyph->glyphBmp + startY * glyph->width;
                 for (s32 bmpY = startY; bmpY < endY; ++bmpY) {
                     const s32 pixelY = yPos + bmpY;
-                    bmpX = startX;
                     
-                    // Process 8 pixels at once
-                    for (; bmpX < simdEnd; ++bmpX) {
-                        alpha = bmpPtr[bmpX] >> 4;
-                        if (alpha) {
-                            pixelX = xPos + bmpX;
-                            if (alpha == 0xF) {
-                                this->setPixel(pixelX, pixelY, color);
-                            } else {
-                                this->setPixelBlendDst(pixelX, pixelY, Color(color.r, color.g, color.b, alpha));
-                            }
-                        }
-                    }
-                    
-                    // Process remaining pixels
-                    for (; bmpX < endX; ++bmpX) {
-                        alpha = bmpPtr[bmpX] >> 4;
-                        if (alpha) {
-                            pixelX = xPos + bmpX;
-                            if (alpha == 0xF) {
-                                this->setPixel(pixelX, pixelY, color);
-                            } else {
-                                this->setPixelBlendDst(pixelX, pixelY, Color(color.r, color.g, color.b, alpha));
-                            }
+                    for (s32 bmpX = startX; bmpX < endX; ++bmpX) {
+                        u8 alpha = bmpPtr[bmpX] >> 4;
+                        if (alpha == 0) [[unlikely]] continue;
+                        
+                        // Apply global opacity limit
+                        alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
+                        
+                        const s32 pixelX = xPos + bmpX;
+                        
+                        if (alpha == 0xF) [[likely]] {
+                            this->setPixel(pixelX, pixelY, color);
+                        } else {
+                            this->setPixelBlendDst(pixelX, pixelY, Color(color.r, color.g, color.b, alpha));
                         }
                     }
                     bmpPtr += glyph->width;
                 }
             }
-
+            
 
             /**
              * @brief Adds the layer from screenshot and recording stacks
@@ -4151,7 +4152,7 @@ namespace tsl {
                 // Only recalculate progress if enough time has passed (reduce computation frequency)
                 if (currentTime_ns - lastTimeUpdate > 16666666) { // ~60 FPS update rate
                     //double time_seconds = currentTime_ns / 1000000000.0;
-                    cachedProgress = (std::cos(2.0 * ult::_M_PI * std::fmod(currentTime_ns / 1000000000.0 - 0.25, 1.0)) + 1.0) / 2.0;
+                    cachedProgress = (ult::cos(2.0 * ult::M_PI * std::fmod(currentTime_ns / 1000000000.0 - 0.25, 1.0)) + 1.0) / 2.0;
                     lastTimeUpdate = currentTime_ns;
                 }
                 progress = cachedProgress;
@@ -4176,26 +4177,32 @@ namespace tsl {
                 y = 0;
                 if (this->m_highlightShaking) {
                     t_ns = currentTime_ns - this->m_highlightShakingStartTime;
-                    if (t_ns >= 100000000) // 100ms in nanoseconds
+                    const double t_ms = t_ns / 1000000.0;
+                    
+                    static constexpr double SHAKE_DURATION_MS = 200.0;
+                    
+                    if (t_ms >= SHAKE_DURATION_MS)
                         this->m_highlightShaking = false;
                     else {
-                        // Use faster random generation if available, or cache amplitude
-                        static int cachedAmplitude = std::rand() % 5 + 5;
-                        if (t_ns % 10000000 == 0) // Update amplitude less frequently
-                            cachedAmplitude = std::rand() % 5 + 5;
-                        amplitude = cachedAmplitude;
+                        // Generate random amplitude only once per shake using the start time as seed
+                        const double amplitude = 6.0 + ((this->m_highlightShakingStartTime / 1000000) % 5);
+                        const double progress = t_ms / SHAKE_DURATION_MS; // 0 to 1
                         
-                        const int shakeOffset = shakeAnimation(t_ns, amplitude);
+                        // Lighter damping so both bounces are visible
+                        const double damping = 1.0 / (1.0 + 2.5 * progress * (1.0 + 1.3 * progress));
+                        
+                        // 2 full oscillations = 2 clear bounces
+                        const double oscillation = ult::cos(ult::M_PI * 4.0 * progress);
+                        const double displacement = amplitude * oscillation * damping;
+                        const int offset = static_cast<int>(displacement);
+                        
                         switch (this->m_highlightShakingDirection) {
-                            case FocusDirection::Up:    y = -shakeOffset; break;
-                            case FocusDirection::Down:  y = shakeOffset; break;
-                            case FocusDirection::Left:  x = -shakeOffset; break;
-                            case FocusDirection::Right: x = shakeOffset; break;
+                            case FocusDirection::Up:    y = -offset; break;
+                            case FocusDirection::Down:  y = offset; break;
+                            case FocusDirection::Left:  x = -offset; break;
+                            case FocusDirection::Right: x = offset; break;
                             default: break;
                         }
-                        
-                        x = std::clamp(x, -amplitude, amplitude);
-                        y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
                 
@@ -4246,7 +4253,7 @@ namespace tsl {
                     //double time_seconds = currentTime_ns * 0.000000001; // Direct conversion like original
                     
                     // Match original calculation exactly but with higher precision
-                    cachedHighlightProgress = (std::cos(2.0 * ult::_M_PI * std::fmod(currentTime_ns * 0.000000001 - 0.25, 1.0)) + 1.0) * 0.5;
+                    cachedHighlightProgress = (ult::cos(2.0 * ult::M_PI * std::fmod(currentTime_ns * 0.000000001 - 0.25, 1.0)) + 1.0) * 0.5;
                     
                     lastHighlightUpdate = currentTime_ns;
                 }
@@ -4283,26 +4290,32 @@ namespace tsl {
                 
                 if (this->m_highlightShaking) {
                     t_ns = currentTime_ns - this->m_highlightShakingStartTime;
-                    if (t_ns >= 100000000) // 100ms in nanoseconds
+                    const double t_ms = t_ns / 1000000.0;
+                    
+                    static constexpr double SHAKE_DURATION_MS = 200.0;
+                    
+                    if (t_ms >= SHAKE_DURATION_MS)
                         this->m_highlightShaking = false;
                     else {
-                        // Use cached amplitude like in drawClickAnimation
-                        static int cachedAmplitude = std::rand() % 5 + 5;
-                        if (t_ns % 10000000 == 0)
-                            cachedAmplitude = std::rand() % 5 + 5;
-                        amplitude = cachedAmplitude;
+                        // Generate random amplitude only once per shake using the start time as seed
+                        const double amplitude = 6.0 + ((this->m_highlightShakingStartTime / 1000000) % 5);
+                        const double progress = t_ms / SHAKE_DURATION_MS; // 0 to 1
                         
-                        const int shakeOffset = shakeAnimation(t_ns, amplitude);
+                        // Lighter damping so both bounces are visible
+                        const double damping = 1.0 / (1.0 + 2.5 * progress * (1.0 + 1.3 * progress));
+                        
+                        // 2 full oscillations = 2 clear bounces
+                        const double oscillation = ult::cos(ult::M_PI * 4.0 * progress);
+                        const double displacement = amplitude * oscillation * damping;
+                        const int offset = static_cast<int>(displacement);
+                        
                         switch (this->m_highlightShakingDirection) {
-                            case FocusDirection::Up:    y = -shakeOffset; break;
-                            case FocusDirection::Down:  y = shakeOffset; break;
-                            case FocusDirection::Left:  x = -shakeOffset; break;
-                            case FocusDirection::Right: x = shakeOffset; break;
+                            case FocusDirection::Up:    y = -offset; break;
+                            case FocusDirection::Down:  y = offset; break;
+                            case FocusDirection::Left:  x = -offset; break;
+                            case FocusDirection::Right: x = offset; break;
                             default: break;
                         }
-                        
-                        x = std::clamp(x, -amplitude, amplitude);
-                        y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
                 
@@ -4456,15 +4469,15 @@ namespace tsl {
              * @param a Amplitude
              * @return Damped sine wave output
              */
-            inline int shakeAnimation(u64 t_ns, float a) {
-                //float w = 0.2F;
-                //float tau = 0.05F;
-                
-                // Convert nanoseconds to microseconds for the calculation
-                const int t_us = t_ns / 1000;
-                
-                return roundf(a * exp(-(0.05F * t_us) * sin(0.2F * t_us)));
-            }
+           //inline int shakeAnimation(u64 t_ns, float a) {
+           //    //float w = 0.2F;
+           //    //float tau = 0.05F;
+           //    
+           //    // Convert nanoseconds to microseconds for the calculation
+           //    const int t_us = t_ns / 1000;
+           //    
+           //    return roundf(a * exp(-(0.05F * t_us) * sin(0.2F * t_us)));
+           //}
             
         private:
             friend class Gui;
@@ -4563,13 +4576,13 @@ namespace tsl {
                 const u64 currentTime_ns = armTicksToNs(armGetSystemTick());
                 const double currentTimeCount = static_cast<double>(currentTime_ns) / 1000000000.0;
                 const double timeBase = std::fmod(currentTimeCount, cycleDuration);
-                const double waveScale = 2.0 * ult::_M_PI / cycleDuration;
-                static constexpr double phaseShift = ult::_M_PI / 2.0;
+                const double waveScale = 2.0 * ult::M_PI / cycleDuration;
+                static constexpr double phaseShift = ult::M_PI / 2.0;
                 
                 float countOffset = 0;
                 for (const char letter : ult::SPLIT_PROJECT_NAME_1) {
                     const double wavePhase = waveScale * (timeBase + static_cast<double>(countOffset));
-                    const double rawProgress = std::cos(wavePhase - phaseShift);
+                    const double rawProgress = ult::cos(wavePhase - phaseShift);
                     
                     const double normalizedProgress = (rawProgress + 1.0) * 0.5;
                     const double smoothedProgress = normalizedProgress * normalizedProgress * (3.0 - 2.0 * normalizedProgress);
@@ -4793,7 +4806,8 @@ namespace tsl {
                     }
             #endif
             
-                    if (ult::touchingMenu.load(std::memory_order_acquire) && ult::inMainMenu.load(std::memory_order_acquire)) {
+                    if (ult::touchingMenu.load(std::memory_order_acquire) && (ult::inMainMenu.load(std::memory_order_acquire) ||
+                        (ult::inHiddenMode.load(std::memory_order_acquire) && !ult::inSettingsMenu.load(std::memory_order_acquire) && !ult::inSubSettingsMenu.load(std::memory_order_acquire)))) {
                         renderer->drawRoundedRect(0.0f + 7, 12.0f, 245.0f - 13, 73.0f, 10.0f, a(clickColor));
                     }
                     
@@ -4847,7 +4861,8 @@ namespace tsl {
                                         break;
                                     case 'r': // red
                                         if (len == 3 && m_colorSelection.compare("red") == 0) {
-                                            drawColor = RGB888("#F7253E");
+                                            //drawColor = RGB888("#F7253E");
+                                            drawColor = {0xF, 0x2, 0x4, 0xF};
                                         }
                                         break;
                                     case 'b': // blue
@@ -4862,14 +4877,17 @@ namespace tsl {
                                         break;
                                     case 'o': // orange
                                         if (len == 6 && m_colorSelection.compare("orange") == 0) {
-                                            drawColor = {0xFF, 0xA5, 0x00, 0xFF};
+                                            //drawColor = {0xFF, 0xA5, 0x00, 0xFF};
+                                            drawColor = {0xF, 0xA, 0x0, 0xF};
                                         }
                                         break;
                                     case 'p': // pink or purple
                                         if (len == 4 && m_colorSelection.compare("pink") == 0) {
-                                            drawColor = {0xFF, 0x69, 0xB4, 0xFF};
+                                            //drawColor = {0xFF, 0x69, 0xB4, 0xFF};
+                                            drawColor = {0xF, 0x6, 0xB, 0xF};
                                         } else if (len == 6 && m_colorSelection.compare("purple") == 0) {
-                                            drawColor = {0x80, 0x00, 0x80, 0xFF};
+                                            //drawColor = {0x80, 0x00, 0x80, 0xFF};
+                                            drawColor = {0x8, 0x0, 0x8, 0xF};
                                         }
                                         break;
                                     case 'w': // white
@@ -7874,7 +7892,7 @@ namespace tsl {
                 const float touchDurationInSeconds = static_cast<float>(touchDuration_ns) * 1e-9f;
                 
                 #if IS_LAUNCHER_DIRECTIVE
-                if (touchDurationInSeconds >= 0.7f) [[unlikely]] {
+                if (touchDurationInSeconds >= 0.8f) [[unlikely]] {
                     ult::longTouchAndRelease.store(true, std::memory_order_release);
                     return useScriptKey ? SCRIPT_KEY : STAR_KEY;
                 }
@@ -8472,7 +8490,7 @@ namespace tsl {
                 
                 // Draw separator if needed
                 if (this->m_hasSeparator) {
-                    renderer->drawRect(this->getX()+1+1, this->getBottomBound() - 29-4, 4, 22, (headerSeparatorColor));
+                    renderer->drawRect(this->getX()+1+1, this->getBottomBound() - 29-4, 4, 22, aWithOpacity(headerSeparatorColor));
                 }
                 
                 // Determine text position
@@ -8952,7 +8970,7 @@ namespace tsl {
                 const double time_seconds = static_cast<double>(currentTime_ns) / 1000000000.0;
                 
                 // Standard cosine wave calculation with high precision
-                progress = (std::cos(2.0 * ult::_M_PI * std::fmod(time_seconds, 1.0) - ult::_M_PI / 2) + 1.0) / 2.0;
+                progress = (ult::cos(2.0 * ult::M_PI * std::fmod(time_seconds, 1.0) - ult::M_PI / 2) + 1.0) / 2.0;
             
                 // High precision floating point color interpolation
                 highlightColor = {
@@ -8967,32 +8985,33 @@ namespace tsl {
                 y = 0;
                 
                 if (this->m_highlightShaking) {
-                    //const u64 currentTime_ns = armTicksToNs(armGetSystemTick());
-                    t_ns = currentTime_ns - this->m_highlightShakingStartTime; // Changed
-                    if (t_ns >= 100000000) // 100ms in nanoseconds
+                    t_ns = currentTime_ns - this->m_highlightShakingStartTime;
+                    const double t_ms = t_ns / 1000000.0;
+                    
+                    static constexpr double SHAKE_DURATION_MS = 200.0;
+                    
+                    if (t_ms >= SHAKE_DURATION_MS)
                         this->m_highlightShaking = false;
                     else {
-                        amplitude = std::rand() % 5 + 5;
+                        // Generate random amplitude only once per shake using the start time as seed
+                        const double amplitude = 6.0 + ((this->m_highlightShakingStartTime / 1000000) % 5);
+                        const double progress = t_ms / SHAKE_DURATION_MS; // 0 to 1
+                        
+                        // Lighter damping so both bounces are visible
+                        const double damping = 1.0 / (1.0 + 2.5 * progress * (1.0 + 1.3 * progress));
+                        
+                        // 2 full oscillations = 2 clear bounces
+                        const double oscillation = ult::cos(ult::M_PI * 4.0 * progress);
+                        const double displacement = amplitude * oscillation * damping;
+                        const int offset = static_cast<int>(displacement);
                         
                         switch (this->m_highlightShakingDirection) {
-                            case FocusDirection::Up:
-                                y -= shakeAnimation(t_ns, amplitude); // Changed parameter
-                                break;
-                            case FocusDirection::Down:
-                                y += shakeAnimation(t_ns, amplitude); // Changed parameter
-                                break;
-                            case FocusDirection::Left:
-                                x -= shakeAnimation(t_ns, amplitude); // Changed parameter
-                                break;
-                            case FocusDirection::Right:
-                                x += shakeAnimation(t_ns, amplitude); // Changed parameter
-                                break;
-                            default:
-                                break;
+                            case FocusDirection::Up:    y = -offset; break;
+                            case FocusDirection::Down:  y = offset; break;
+                            case FocusDirection::Left:  x = -offset; break;
+                            case FocusDirection::Right: x = offset; break;
+                            default: break;
                         }
-                        
-                        x = std::clamp(x, -amplitude, amplitude);
-                        y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
                 
@@ -9828,7 +9847,7 @@ namespace tsl {
             virtual void drawHighlight(gfx::Renderer *renderer) override {
                 const u64 currentTime_ns = armTicksToNs(armGetSystemTick());
                 const double timeInSeconds = static_cast<double>(currentTime_ns) / 1000000000.0;
-                progress = ((std::cos(2.0 * ult::_M_PI * std::fmod(timeInSeconds, 1.0) - ult::_M_PI / 2) + 1.0) / 2.0);
+                progress = ((ult::cos(2.0 * ult::M_PI * std::fmod(timeInSeconds, 1.0) - ult::M_PI / 2) + 1.0) / 2.0);
                 
                 Color clickColor1 = highlightColor1;
                 Color clickColor2 = clickColor;
@@ -9886,30 +9905,32 @@ namespace tsl {
                 
                 if (this->m_highlightShaking) {
                     t_ns = currentTime_ns - this->m_highlightShakingStartTime;
-                    if (t_ns >= 100000000ULL)
+                    const double t_ms = t_ns / 1000000.0;
+                    
+                    static constexpr double SHAKE_DURATION_MS = 200.0;
+                    
+                    if (t_ms >= SHAKE_DURATION_MS)
                         this->m_highlightShaking = false;
                     else {
-                        amplitude = std::rand() % 5 + 5;
+                        // Generate random amplitude only once per shake using the start time as seed
+                        const double amplitude = 6.0 + ((this->m_highlightShakingStartTime / 1000000) % 5);
+                        const double progress = t_ms / SHAKE_DURATION_MS; // 0 to 1
+                        
+                        // Lighter damping so both bounces are visible
+                        const double damping = 1.0 / (1.0 + 2.5 * progress * (1.0 + 1.3 * progress));
+                        
+                        // 2 full oscillations = 2 clear bounces
+                        const double oscillation = ult::cos(ult::M_PI * 4.0 * progress);
+                        const double displacement = amplitude * oscillation * damping;
+                        const int offset = static_cast<int>(displacement);
                         
                         switch (this->m_highlightShakingDirection) {
-                            case FocusDirection::Up:
-                                y -= shakeAnimation(t_ns, amplitude);
-                                break;
-                            case FocusDirection::Down:
-                                y += shakeAnimation(t_ns, amplitude);
-                                break;
-                            case FocusDirection::Left:
-                                x -= shakeAnimation(t_ns, amplitude);
-                                break;
-                            case FocusDirection::Right:
-                                x += shakeAnimation(t_ns, amplitude);
-                                break;
-                            default:
-                                break;
+                            case FocusDirection::Up:    y = -offset; break;
+                            case FocusDirection::Down:  y = offset; break;
+                            case FocusDirection::Left:  x = -offset; break;
+                            case FocusDirection::Right: x = offset; break;
+                            default: break;
                         }
-                        
-                        x = std::clamp(x, -amplitude, amplitude);
-                        y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
             
@@ -13295,7 +13316,7 @@ namespace tsl {
         u8 action;
     };
     
-    static const struct option_entry options[] = {
+    static constexpr struct option_entry options[] = {
         {"direct", 6, 1},
         {"skipCombo", 9, 2},
         {"lastTitleID", 11, 3}, 
@@ -13335,8 +13356,8 @@ namespace tsl {
         }
     
         if (argc > 0) {
-            g_overlayFilename = ult::getNameFromPath(argv[0]);
-            lastOverlayFilename = g_overlayFilename;
+            //g_overlayFilename = ult::getNameFromPath(argv[0]);
+            lastOverlayFilename = ult::getNameFromPath(argv[0]);
     
             lastOverlayMode.clear();
             bool skip;
@@ -13405,7 +13426,7 @@ namespace tsl {
                     switch (options[i].action) {
                         case 1: // direct
                             directMode = true;
-                            g_overlayFilename = "";
+                            //g_overlayFilename = "";
                             jumpItemName = "";
                             jumpItemValue = "";
                             jumpItemExactMatch.store(true, std::memory_order_release);
@@ -13483,50 +13504,52 @@ namespace tsl {
     #if IS_LAUNCHER_DIRECTIVE
        
         {
-            bool inOverlay;
-            
             auto configData = ult::getParsedDataFromIniFile(ult::ULTRAHAND_CONFIG_INI_PATH);
             bool needsUpdate = false;
-    
-            if (ult::firstBoot) {
-                configData[ult::ULTRAHAND_PROJECT_NAME][ult::IN_OVERLAY_STR] = ult::FALSE_STR;
+        
+            // Get reference to project section (create if missing)
+            auto& project = configData[ult::ULTRAHAND_PROJECT_NAME];
+        
+            // Determine current overlay state
+            bool inOverlay = true;
+            auto it = project.find(ult::IN_OVERLAY_STR);
+            if (it != project.end()) {
+                inOverlay = (it->second != ult::FALSE_STR);
+            }
+        
+            // Only update the overlay key once, for either firstBoot or skipCombo
+            if (ult::firstBoot || (inOverlay && skipCombo)) {
+                project[ult::IN_OVERLAY_STR] = ult::FALSE_STR;
                 needsUpdate = true;
+                if (inOverlay && skipCombo) {
+                    shouldFireEvent = true;
+                }
             }
-    
-            auto projectIt = configData.find(ult::ULTRAHAND_PROJECT_NAME);
-            if (projectIt != configData.end()) {
-                auto overlayIt = projectIt->second.find(ult::IN_OVERLAY_STR);
-                inOverlay = (overlayIt == projectIt->second.end() || overlayIt->second != ult::FALSE_STR);
-            } else {
-                inOverlay = true;
-            }
-    
-            if (inOverlay && skipCombo) {
-                configData[ult::ULTRAHAND_PROJECT_NAME][ult::IN_OVERLAY_STR] = ult::FALSE_STR;
-                needsUpdate = true;
-                shouldFireEvent = true;
-            }
-    
+        
+            // Write INI only if we changed something
             if (needsUpdate) {
                 ult::saveIniFileData(ult::ULTRAHAND_CONFIG_INI_PATH, configData);
             }
-    
+        
+            // Fire event if needed
             if (shouldFireEvent) {
                 eventFire(&shData.comboEvent);
             }
         }
     #else
         {
-            
             auto configData = ult::getParsedDataFromIniFile(ult::ULTRAHAND_CONFIG_INI_PATH);
-
+        
             auto projectIt = configData.find(ult::ULTRAHAND_PROJECT_NAME);
             if (projectIt != configData.end()) {
-                auto overlayIt = projectIt->second.find(ult::IN_OVERLAY_STR);
-                const bool inOverlay = (overlayIt == projectIt->second.end() || overlayIt->second != ult::FALSE_STR);
-
+                auto& project = projectIt->second;
+        
+                auto overlayIt = project.find(ult::IN_OVERLAY_STR);
+                const bool inOverlay = (overlayIt == project.end() ||
+                                        overlayIt->second != ult::FALSE_STR);
+        
                 if (inOverlay && directMode) {
-                    configData[ult::ULTRAHAND_PROJECT_NAME][ult::IN_OVERLAY_STR] = ult::FALSE_STR;
+                    project[ult::IN_OVERLAY_STR] = ult::FALSE_STR;
                     ult::saveIniFileData(ult::ULTRAHAND_CONFIG_INI_PATH, configData);
                 }
             }
@@ -13541,9 +13564,9 @@ namespace tsl {
         overlay->disableNextAnimation();
     
         {
-            Handle handles[2] = { shData.comboEvent.revent, notificationEvent.revent };
+            const Handle handles[2] = { shData.comboEvent.revent, notificationEvent.revent };
             s32 index = -1;
-    
+            
             bool exitAfterPrompt = false;
             bool comboBreakout = false;
             bool firstLoop = !ult::firstBoot;
