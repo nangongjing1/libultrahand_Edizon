@@ -126,6 +126,8 @@ namespace ult {
       return sign * (1.0 + x2 * (-0.5 + x2 * (0.04166666666666666 + x2 * (-0.001388888888888889 + x2 * (0.0000248015873015873 - x2 * 0.0000002755731922398589)))));
    }
 
+    
+
     extern bool correctFrameSize; // for detecting the correct Overlay display size
 
     extern u16 DefaultFramebufferWidth;            ///< Width of the framebuffer
@@ -374,6 +376,7 @@ namespace ult {
     extern std::string HIDE_OVERLAY;
     extern std::string HIDE_PACKAGE;
     extern std::string LAUNCH_ARGUMENTS;
+    extern std::string FORCE_LNY2_SUPPORT;
     extern std::string QUICK_LAUNCH;
     extern std::string BOOT_COMMANDS;
     extern std::string EXIT_COMMANDS;
@@ -401,6 +404,8 @@ namespace ult {
     extern std::string USER_GUIDE;
     extern std::string SHOW_HIDDEN;
     extern std::string SHOW_DELETE;
+    extern std::string SHOW_UNSUPPORTED;
+
     extern std::string PAGE_SWAP;
     extern std::string RIGHT_SIDE_MODE;
     extern std::string OVERLAY_VERSIONS;
@@ -409,7 +414,7 @@ namespace ult {
     //extern std::string VERSION_LABELS;
     extern std::string KEY_COMBO;
     extern std::string MODE;
-    extern std::string MODES;
+    extern std::string LAUNCH_MODES;
     extern std::string LANGUAGE;
     extern std::string OVERLAY_INFO;
     extern std::string SOFTWARE_UPDATE;
@@ -476,6 +481,7 @@ namespace ult {
     extern std::string REBOOT_IS_REQUIRED;
     extern std::string HOLD_A_TO_DELETE;
     extern std::string SELECTION_IS_EMPTY;
+    extern std::string FORCED_SUPPORT_WARNING;
 
     //extern std::string PACKAGE_VERSIONS;
     //extern std::string PROGRESS_ANIMATION;

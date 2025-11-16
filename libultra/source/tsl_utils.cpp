@@ -472,6 +472,7 @@ namespace ult {
     std::string HIDE_OVERLAY = "Hide Overlay";
     std::string HIDE_PACKAGE = "Hide Package";
     std::string LAUNCH_ARGUMENTS = "Launch Arguments";
+    std::string FORCE_LNY2_SUPPORT = "Force LNY2 Support";
     std::string QUICK_LAUNCH = "Quick Launch";
     std::string BOOT_COMMANDS = "Boot Commands";
     std::string EXIT_COMMANDS = "Exit Commands";
@@ -499,6 +500,7 @@ namespace ult {
     std::string USER_GUIDE = "User Guide";
     std::string SHOW_HIDDEN = "Show Hidden";
     std::string SHOW_DELETE = "Show Delete";
+    std::string SHOW_UNSUPPORTED = "Show Unsupported";
     std::string PAGE_SWAP = "Page Swap";
     std::string RIGHT_SIDE_MODE = "Right-side Mode";
     std::string OVERLAY_VERSIONS = "Overlay Versions";
@@ -507,7 +509,7 @@ namespace ult {
     //std::string VERSION_LABELS = "Version Labels";
     std::string KEY_COMBO = "Key Combo";
     std::string MODE = "Mode";
-    std::string MODES = "Modes";
+    std::string LAUNCH_MODES = "Launch Modes";
     std::string LANGUAGE = "Language";
     std::string OVERLAY_INFO = "Overlay Info";
     std::string SOFTWARE_UPDATE = "Software Update";
@@ -573,6 +575,7 @@ namespace ult {
     std::string REBOOT_IS_REQUIRED = "Reboot is required.";
     std::string HOLD_A_TO_DELETE = "Hold \uE0E0 to Delete";
     std::string SELECTION_IS_EMPTY = "Selection is empty!";
+    std::string FORCED_SUPPORT_WARNING = "Forcing support can be dangerous.";
 
 
     //std::string PACKAGE_VERSIONS = "Package Versions";
@@ -682,6 +685,7 @@ namespace ult {
         HIDE_OVERLAY = "Hide Overlay";
         HIDE_PACKAGE = "Hide Package";
         LAUNCH_ARGUMENTS = "Launch Arguments";
+        FORCE_LNY2_SUPPORT = "Force LNY2 Support";
         QUICK_LAUNCH = "Quick Launch";
         BOOT_COMMANDS = "Boot Commands";
         EXIT_COMMANDS = "Exit Commands";
@@ -708,6 +712,7 @@ namespace ult {
         USER_GUIDE = "User Guide";
         SHOW_HIDDEN = "Show Hidden";
         SHOW_DELETE = "Show Delete";
+        SHOW_UNSUPPORTED = "Show Unsupported";
         PAGE_SWAP = "Page Swap";
         RIGHT_SIDE_MODE = "Right-side Mode";
         OVERLAY_VERSIONS = "Overlay Versions";
@@ -716,7 +721,7 @@ namespace ult {
         //VERSION_LABELS = "Version Labels";
         KEY_COMBO = "Key Combo";
         MODE = "Mode";
-        MODES = "Modes";
+        LAUNCH_MODES = "Launch Modes";
         LANGUAGE = "Language";
         OVERLAY_INFO = "Overlay Info";
         SOFTWARE_UPDATE = "Software Update";
@@ -797,6 +802,7 @@ namespace ult {
         REBOOT_IS_REQUIRED = "Reboot is required.";
         HOLD_A_TO_DELETE = "Hold  to Delete";
         SELECTION_IS_EMPTY = "Selection is empty!";
+        FORCED_SUPPORT_WARNING = "Forcing support can be dangerous.";
 
         //EMPTY = "Empty";
     
@@ -891,6 +897,7 @@ namespace ult {
             {"HIDE_PACKAGE", &HIDE_PACKAGE},
             {"HIDE_OVERLAY", &HIDE_OVERLAY},
             {"LAUNCH_ARGUMENTS", &LAUNCH_ARGUMENTS},
+            {"FORCE_LNY2_SUPPORT", &FORCE_LNY2_SUPPORT},
             {"QUICK_LAUNCH", &QUICK_LAUNCH},
             {"BOOT_COMMANDS", &BOOT_COMMANDS},
             {"EXIT_COMMANDS", &EXIT_COMMANDS},
@@ -918,6 +925,7 @@ namespace ult {
             {"USER_GUIDE", &USER_GUIDE},
             {"SHOW_HIDDEN", &SHOW_HIDDEN},
             {"SHOW_DELETE", &SHOW_DELETE},
+            {"SHOW_UNSUPPORTED", &SHOW_UNSUPPORTED},
             {"PAGE_SWAP", &PAGE_SWAP},
             {"RIGHT_SIDE_MODE", &RIGHT_SIDE_MODE},
             {"OVERLAY_VERSIONS", &OVERLAY_VERSIONS},
@@ -926,7 +934,7 @@ namespace ult {
             //{"VERSION_LABELS", &VERSION_LABELS},
             {"KEY_COMBO", &KEY_COMBO},
             {"MODE", &MODE},
-            {"MODES", &MODES},
+            {"LAUNCH_MODES", &LAUNCH_MODES},
             {"LANGUAGE", &LANGUAGE},
             {"OVERLAY_INFO", &OVERLAY_INFO},
             {"SOFTWARE_UPDATE", &SOFTWARE_UPDATE},
@@ -993,6 +1001,7 @@ namespace ult {
             {"REBOOT_IS_REQUIRED", &REBOOT_IS_REQUIRED},
             {"HOLD_A_TO_DELETE", &HOLD_A_TO_DELETE},
             {"SELECTION_IS_EMPTY", &SELECTION_IS_EMPTY},
+            {"FORCED_SUPPORT_WARNING", &FORCED_SUPPORT_WARNING},
 
             //{"PACKAGE_VERSIONS", &PACKAGE_VERSIONS},
             //{"PROGRESS_ANIMATION", &PROGRESS_ANIMATION},
@@ -1469,6 +1478,8 @@ namespace ult {
             wallpaperData.clear();
             return;
         }
+
+        setvbuf(file, nullptr, _IOFBF, 256 * 1024);
         
         constexpr size_t chunkBytes = 128 * 1024;
         uint8_t chunkBuffer[chunkBytes];
@@ -1478,11 +1489,11 @@ namespace ult {
         const uint8x8_t mask = vdup_n_u8(0xF0);
         
         while (totalRead < originalDataSize) {
-            size_t remaining = originalDataSize - totalRead;
-            size_t toRead = remaining < chunkBytes ? remaining : chunkBytes;
+            const size_t remaining = originalDataSize - totalRead;
+            const size_t toRead = remaining < chunkBytes ? remaining : chunkBytes;
             
-            size_t bytesRead = fread(chunkBuffer, 1, toRead, file);
-            if (bytesRead == 0 || bytesRead % 8 != 0) {
+            const size_t bytesRead = fread(chunkBuffer, 1, toRead, file);
+            if (bytesRead == 0) {
                 fclose(file);
                 wallpaperData.clear();
                 return;
