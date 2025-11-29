@@ -13,7 +13,7 @@
  *   altered or removed.
  *
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2024 ppkantorski
+ *  Copyright (c) 2023-2025 ppkantorski
  ********************************************************************************/
 
 #include "global_vars.hpp"
@@ -26,6 +26,10 @@ namespace ult {
     const std::string TESLA_CONFIG_PATH  = ROOT_PATH + "config/tesla/";
     const std::string SWITCH_PATH        = ROOT_PATH + "switch/";
 
+    const std::string NX_OVLLOADER_PATH = ROOT_PATH + "config/nx-ovlloader/";
+    const std::string OVL_HEAP_CONFIG_PATH = NX_OVLLOADER_PATH + "heap_size.bin";
+    const std::string OVL_EXIT_FLAG_PATH = NX_OVLLOADER_PATH + "exit_flag.bin";
+    
     // Filenames
     CONSTEXPR_STRING std::string CONFIG_FILENAME       = "config.ini";
     const std::string BOOT_PACKAGE_FILENAME            = "boot_package.ini";
@@ -59,7 +63,8 @@ namespace ult {
     std::string THEME_CONFIG_INI_PATH             = BASE_CONFIG_PATH + THEME_FILENAME;
     std::string WALLPAPER_PATH                    = BASE_CONFIG_PATH + WALLPAPER_FILENAME;
     const std::string DOWNLOADS_PATH              = BASE_CONFIG_PATH + "downloads/";
-    const std::string EXPANSION_PATH              = BASE_CONFIG_PATH + "expansion/";
+
+    //const std::string EXPANSION_PATH              = BASE_CONFIG_PATH + "expansion/";
     const std::string FUSE_DATA_INI_PATH          = BASE_CONFIG_PATH + FUSE_FILENAME;
     const std::string PACKAGE_PATH                = SWITCH_PATH + ".packages/";
     const std::string OVERLAY_PATH                = SWITCH_PATH + ".overlays/";
@@ -79,12 +84,13 @@ namespace ult {
     const std::string ULTRAHAND_REPO_URL            = GITHUB_BASE_URL + "Ultrahand-Overlay/";
     const std::string INCLUDED_THEME_FOLDER_URL     = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/themes/";
     const std::string LATEST_RELEASE_INFO_URL       = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/RELEASE.ini";
-    const std::string NX_OVLLOADER_ZIP_URL          = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader.zip";
-    const std::string NX_OVLLOADER_PLUS_ZIP_URL     = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader+.zip";
+    const std::string LATEST_UPDATER_INI_URL        = ULTRAHAND_REPO_URL + "releases/latest/download/update.ini";
+    //const std::string NX_OVLLOADER_ZIP_URL          = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader.zip";
+    //const std::string NX_OVLLOADER_PLUS_ZIP_URL     = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader+.zip";
     const std::string OLD_NX_OVLLOADER_ZIP_URL      = GITHUB_BASE_URL + "nx-ovlloader/releases/download/v1.0.8/nx-ovlloader.zip";
-    const std::string OLD_NX_OVLLOADER_PLUS_ZIP_URL = GITHUB_BASE_URL + "nx-ovlloader/releases/download/v1.0.8/nx-ovlloader+.zip";
+    //const std::string OLD_NX_OVLLOADER_PLUS_ZIP_URL = GITHUB_BASE_URL + "nx-ovlloader/releases/download/v1.0.8/nx-ovlloader+.zip";
     const std::string UPDATER_PAYLOAD_URL           = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/payloads/ultrahand_updater.bin";
-    const std::string SOUND_EFFECTS_URL             = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/sounds/sounds.zip";
+    //const std::string SOUND_EFFECTS_URL             = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/sounds/sounds.zip";
 
     // Launch options
     const std::string LAUNCH_ARGS_STR       = "launch_args";
@@ -164,6 +170,7 @@ namespace ult {
     CONSTEXPR_STRING std::string INPROGRESS_SYMBOL   = "\u25CF";
     CONSTEXPR_STRING std::string STAR_SYMBOL         = "\u2605";
     CONSTEXPR_STRING std::string DIVIDER_SYMBOL      = "";
+    CONSTEXPR_STRING std::string NOTIFY_HEADER       = "  ";
 
     const std::vector<std::string> THROBBER_SYMBOLS = {"", "", "", "", "", "", "", ""};
 
