@@ -661,6 +661,8 @@ namespace tsl {
         
         std::string UI_PATH = UI_OVERRIDE_PATH;
         ult::preprocessPath(UI_PATH);
+        ult::createDirectory(UI_PATH); // create UI override path automatically (when provided)
+
         const std::string NEW_THEME_CONFIG_INI_PATH = UI_PATH+"theme.ini";
         const std::string NEW_WALLPAPER_PATH = UI_PATH+"wallpaper.rgba";
                   
@@ -676,10 +678,12 @@ namespace tsl {
         // Set Ultrahand Globals using loaded section (defaults match initialization function)
         ult::useLaunchCombos = getBoolValue("launch_combos", true);       // TRUE_STR default
         ult::useNotifications = getBoolValue("notifications", true);       // TRUE_STR default
-        if (ult::useNotifications && !ult::isFile(ult::NOTIFICATIONS_FLAG_FILEPATH)) {
-            FILE* file = std::fopen((ult::NOTIFICATIONS_FLAG_FILEPATH).c_str(), "w");
-            if (file) {
-                std::fclose(file);
+        if (ult::useNotifications) {
+            if (!ult::isFile(ult::NOTIFICATIONS_FLAG_FILEPATH)) {
+                FILE* file = std::fopen((ult::NOTIFICATIONS_FLAG_FILEPATH).c_str(), "w");
+                if (file) {
+                    std::fclose(file);
+                }
             }
         } else {
             ult::deleteFileOrDirectory(ult::NOTIFICATIONS_FLAG_FILEPATH);
@@ -13202,7 +13206,7 @@ namespace tsl {
                                     if (forceSupportStatus != ult::TRUE_STR) {
                                         continue;
                                     }
-                                    continue;
+                                    //continue;
                                 }
 
                                 // hideHidden check
