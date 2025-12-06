@@ -429,8 +429,8 @@ namespace ult {
     extern std::string VENDOR;
     extern std::string MODEL;
     extern std::string STORAGE;
-    extern std::string NOTICE;
-    extern std::string UTILIZES;
+    //extern std::string NOTICE;
+    //extern std::string UTILIZES;
 
     extern std::string OVERLAY_MEMORY;
     extern std::string NOT_ENOUGH_MEMORY;
@@ -493,6 +493,7 @@ namespace ult {
     extern std::string DELETE_OVERLAY;
     extern std::string SELECTION_IS_EMPTY;
     extern std::string FORCED_SUPPORT_WARNING;
+
     extern std::string TASK_IS_COMPLETE;
     extern std::string TASK_HAS_FAILED;
 
@@ -505,6 +506,7 @@ namespace ult {
     extern std::string BOOT_ENTRY;
     #endif
 
+    extern std::string INCOMPATIBLE_WARNING;
     extern std::string SYSTEM_RAM;
     extern std::string FREE;
 

@@ -1449,13 +1449,14 @@ namespace tsl {
             
             static stbtt_fontinfo* selectFontForCharacter(u32 character) {
                 std::shared_lock<std::shared_mutex> lock(s_cacheMutex);
-                
+            
                 if (!s_initialized) return nullptr;
-                
+            
                 if (stbtt_FindGlyphIndex(s_extFont, character)) {
                     return s_extFont;
                 } else if (s_hasLocalFont && stbtt_FindGlyphIndex(s_localFont, character) != 0) {
-                    return s_localFont;
+                    // Fix: Always fetch degree symbol "°" from the standard Latin font
+                    return (character != 0x00B0) ? s_localFont : s_stdFont;
                 }
                 return s_stdFont;
             }
@@ -1619,7 +1620,8 @@ namespace tsl {
                 if (stbtt_FindGlyphIndex(s_extFont, character)) {
                     return s_extFont;
                 } else if (s_hasLocalFont && stbtt_FindGlyphIndex(s_localFont, character) != 0) {
-                    return s_localFont;
+                    // Fix: Always fetch degree symbol "°" from the standard Latin font
+                    return (character != 0x00B0) ? s_localFont : s_stdFont;
                 }
                 return s_stdFont;
             }
@@ -4689,6 +4691,10 @@ namespace tsl {
                 this->m_clickAnimationProgress = 0;
             }
 
+            inline bool hasFocus() {
+                return this->m_focused;
+            }
+
             virtual bool matchesJumpCriteria(const std::string& jumpText, const std::string& jumpValue, bool contains) const {
                 return false; // Default implementation for non-ListItem elements
             }
@@ -5939,6 +5945,7 @@ namespace tsl {
                 m_listHeight = 0;
                 actualItemCount = 0;
                 m_isItem = false;
+                m_hasSetInitialFocusHack = false;
 
                 {
                     std::lock_guard<std::mutex> lock(s_lastFrameItemsMutex);
@@ -5975,7 +5982,7 @@ namespace tsl {
                 //s_directionalKeyReleased.store(false, std::memory_order_release);
                 //std::lock_guard<std::mutex> lock(s_safeTransitionMutex);
                 //s_safeToSwap.store(false, std::memory_order_release);
-            
+                
                 // NOW take mutex for shared static variable operations
                 {
                     std::lock_guard<std::mutex> lock(s_lastFrameItemsMutex);
@@ -6086,6 +6093,33 @@ namespace tsl {
                 
                 {
                     std::lock_guard<std::mutex> lock(s_lastFrameItemsMutex);
+                    // Force focus ONLY if no item has focus yet
+                    if (!m_hasSetInitialFocusHack && !m_items.empty()) {
+                        // Check if ANY item already has focus
+                        bool anyItemFocused = false;
+                        for (Element* item : m_items) {
+                            if (item && item->hasFocus()) {
+                                anyItemFocused = true;
+                                break;
+                            }
+                        }
+                        
+                        // Only set focus if nothing is focused yet
+                        if (!anyItemFocused) {
+                            for (Element* item : m_items) {
+                                if (item && item->m_isItem) {
+                                    item->setFocused(true);
+                                    m_hasSetInitialFocusHack = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Focus already exists (from handleInput or jump logic), just mark as done
+                            m_hasSetInitialFocusHack = true;
+                        }
+                    }
+
+
                     // Optimized visibility culling
                     for (Element* entry : m_items) {
                         if (entry->getBottomBound() > topBound && entry->getTopBound() < bottomBound) {
@@ -6332,6 +6366,7 @@ namespace tsl {
             bool m_pendingJump = false;
             bool m_hasForwardCached = false;
             bool m_cachingDisabled = false;  // New flag to disable caching
+            bool m_hasSetInitialFocusHack = false;
             
             //bool m_hasRenderedCache = false;
 
@@ -6499,6 +6534,7 @@ namespace tsl {
                 invalidate();
                 m_clearList = false;
                 actualItemCount = 0;
+                m_hasSetInitialFocusHack = false;
             }
             
             void addPendingItems() {
@@ -7265,10 +7301,19 @@ namespace tsl {
             
                 const float oldOffset = m_nextOffset;
                 m_focusedIndex = lastFocusableIndex;
+
+                // NEW: Check if there's a table after the focused item
+                if (lastFocusableIndex + 1 < m_items.size()) {
+                    Element* nextItem = m_items[lastFocusableIndex + 1];
+                    if (nextItem->isTable()) {
+                        m_focusedIndex = lastFocusableIndex + 1;  // Point at the table
+                    }
+                }
+
                 m_nextOffset = targetOffset;
-            
+                
                 Element* newFocus = m_items[lastFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
-            
+                
                 // Trigger feedback if offset or focus changed
                 if ((newFocus && newFocus != oldFocus) ||
                     (std::abs(m_nextOffset - oldOffset) > tolerance)) {
@@ -7735,16 +7780,19 @@ namespace tsl {
         
             virtual bool onClick(u64 keys) override {
                 if (keys & KEY_A) [[likely]] {
-                    triggerRumbleClick.store(true, std::memory_order_release);
-
-                    if (isLocked)
+                    
+                    if (!isLocked) {
+                        triggerRumbleClick.store(true, std::memory_order_release);
+                        if (m_value.find(ult::CAPITAL_ON_STR) != std::string::npos)
+                            triggerOffSound.store(true, std::memory_order_release);
+                        else if (m_value.find(ult::CAPITAL_OFF_STR) != std::string::npos)
+                            triggerOnSound.store(true, std::memory_order_release);
+                        else
+                            triggerEnterSound.store(true, std::memory_order_release);
+                    } else {
+                        triggerRumbleDoubleClick.store(true,std::memory_order_release);
                         triggerWallSound.store(true, std::memory_order_release);
-                    else if (m_value.find(ult::CAPITAL_ON_STR) != std::string::npos)
-                        triggerOffSound.store(true, std::memory_order_release);
-                    else if (m_value.find(ult::CAPITAL_OFF_STR) != std::string::npos)
-                        triggerOnSound.store(true, std::memory_order_release);
-                    else
-                        triggerEnterSound.store(true, std::memory_order_release);
+                    }
                     
                     if (m_flags.m_useClickAnimation)
                         triggerClickAnimation();
@@ -13204,6 +13252,9 @@ namespace tsl {
                                     const auto forceSupportStatus = ult::parseValueFromIniSection(
                                         ult::OVERLAYS_INI_FILEPATH, overlayFileName, "force_support");
                                     if (forceSupportStatus != ult::TRUE_STR) {
+                                        if (tsl::notification) {
+                                            tsl::notification->showNow(ult::NOTIFY_HEADER+ult::INCOMPATIBLE_WARNING, 22);
+                                        }
                                         continue;
                                     }
                                     //continue;
@@ -13965,7 +14016,8 @@ namespace tsl {
                                 triggerExitFeedback();
                             } else {
                                 //triggerRumbleClick.store(true, std::memory_order_release);
-                                triggerEnterSound.store(true, std::memory_order_release);
+                                //triggerEnterSound.store(true, std::memory_order_release);
+                                triggerEnterFeedback();
                             }
                             #else
                             //triggerRumbleClick.store(true, std::memory_order_release);
@@ -14019,7 +14071,7 @@ namespace tsl {
                     hlp::requestForeground(false);
                     shData.overlayOpen.store(false, std::memory_order_release);
                     mainComboHasTriggered.store(false, std::memory_order_acquire);
-                    launchComboHasTriggered.store(false, std::memory_order_acquire);
+                    //launchComboHasTriggered.store(false, std::memory_order_acquire);
                     eventClear(&shData.comboEvent);
                 }
             }

@@ -44,24 +44,31 @@ namespace ult {
     static constexpr u64 DOUBLE_CLICK_PULSE_DURATION_NS = 30'000'000ULL;
     static constexpr u64 DOUBLE_CLICK_GAP_NS = 100'000'000ULL;
     
-    static constexpr HidVibrationValue clickDocked = {
+    //static constexpr HidVibrationValue clickDocked = {
+    //    .amp_low  = 0.20f,
+    //    .freq_low = 100.0f,
+    //    .amp_high = 0.80f,
+    //    .freq_high = 300.0f
+    //};
+    //
+    //static constexpr HidVibrationValue clickHandheld = {
+    //    .amp_low  = 0.20f,
+    //    .freq_low = 100.0f,
+    //    .amp_high = 0.80f,
+    //    .freq_high = 300.0f
+    //};
+    
+    static constexpr HidVibrationValue hapticsPreset = {
         .amp_low  = 0.20f,
         .freq_low = 100.0f,
         .amp_high = 0.80f,
         .freq_high = 300.0f
     };
-    
-    static constexpr HidVibrationValue clickHandheld = {
-        .amp_low  = 0.25f,
-        .freq_low = 100.0f,
-        .amp_high = 1.0f,
-        .freq_high = 300.0f
-    };
-    
+
     static constexpr HidVibrationValue vibrationStop{0};
     
     // ===== Internal helpers =====
-    static void sendVibration(const HidVibrationValue* value) {
+    static inline void sendVibration(const HidVibrationValue* value) {
         if (cachedHandheldStyle)
             hidSendVibrationValue(vibHandheld, value);
     
@@ -69,6 +76,11 @@ namespace ult {
             hidSendVibrationValue(vibPlayer1Left, value);
             hidSendVibrationValue(vibPlayer1Right, value);
         }
+    }
+
+    static inline void sendVibration2x(const HidVibrationValue* value) {
+        sendVibration(value);
+        sendVibration(value);
     }
     
     // ===== Public API =====
@@ -136,16 +148,31 @@ namespace ult {
     void rumbleClick() {
         // Use cached style bit instead of querying hid each call
         //const HidVibrationValue* pattern = cachedHandheldStyle ? &clickHandheld : &clickDocked;
-    
-        sendVibration(cachedHandheldStyle ? &clickHandheld : &clickDocked);
+        sendVibration(&vibrationStop);
+        //if (cachedHandheldStyle) {
+        //    sendVibration(&clickHandheld);
+        //    sendVibration(&clickHandheld);
+        //} else {
+        //    sendVibration(&clickDocked);
+        //    sendVibration(&clickDocked);
+        //}
+        sendVibration2x(&hapticsPreset);
         clickActive.store(true, std::memory_order_release);
         rumbleStartTick = armGetSystemTick();
+
     }
     
     void rumbleDoubleClick() {
         //onst HidVibrationValue* pattern = cachedHandheldStyle ? &clickHandheld : &clickDocked;
-    
-        sendVibration(cachedHandheldStyle ? &clickHandheld : &clickDocked);
+        sendVibration(&vibrationStop);
+        //if (cachedHandheldStyle) {
+        //    sendVibration(&clickHandheld);
+        //    sendVibration(&clickHandheld);
+        //} else {
+        //    sendVibration(&clickDocked);
+        //    sendVibration(&clickDocked);
+        //}
+        sendVibration2x(&hapticsPreset);
         doubleClickActive.store(true, std::memory_order_release);
         doubleClickPulse = 1;
         doubleClickTick = armGetSystemTick();  // Set ONCE
@@ -178,7 +205,14 @@ namespace ult {
             case 2:
                 if (elapsed >= DOUBLE_CLICK_PULSE_DURATION_NS + DOUBLE_CLICK_GAP_NS) {
                     // Use cached style here too
-                    sendVibration(cachedHandheldStyle ? &clickHandheld : &clickDocked);
+                    //if (cachedHandheldStyle) {
+                    //    sendVibration(&clickHandheld);
+                    //    sendVibration(&clickHandheld);
+                    //} else {
+                    //    sendVibration(&clickDocked);
+                    //    sendVibration(&clickDocked);
+                    //}
+                    sendVibration2x(&hapticsPreset);
                     doubleClickPulse = 3;
                     // Don't reset tick!
                 }
@@ -197,15 +231,29 @@ namespace ult {
 
     void rumbleDoubleClickStandalone() {
         // Standalone uses sleeps, but still use cached style for decision
-        const HidVibrationValue* pattern = cachedHandheldStyle ? &clickHandheld : &clickDocked;
-    
-        sendVibration(pattern);
+        //const HidVibrationValue* pattern = cachedHandheldStyle ? &clickHandheld : &clickDocked;
+        sendVibration(&vibrationStop);
+        //if (cachedHandheldStyle) {
+        //    sendVibration(&clickHandheld);
+        //    sendVibration(&clickHandheld);
+        //} else {
+        //    sendVibration(&clickDocked);
+        //    sendVibration(&clickDocked);
+        //}
+        sendVibration2x(&hapticsPreset);
         svcSleepThread(DOUBLE_CLICK_PULSE_DURATION_NS);
     
         sendVibration(&vibrationStop);
         svcSleepThread(DOUBLE_CLICK_GAP_NS);
     
-        sendVibration(pattern);
+        //if (cachedHandheldStyle) {
+        //    sendVibration(&clickHandheld);
+        //    sendVibration(&clickHandheld);
+        //} else {
+        //    sendVibration(&clickDocked);
+        //    sendVibration(&clickDocked);
+        //}
+        sendVibration2x(&hapticsPreset);
         svcSleepThread(DOUBLE_CLICK_PULSE_DURATION_NS);
     
         sendVibration(&vibrationStop);
