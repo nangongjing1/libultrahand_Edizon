@@ -431,7 +431,8 @@ namespace tsl {
         }
     }
 
-    static bool overrideBackButton = false; // for properly overriding the automatic "go back" functionality of KEY_B button presses
+    inline bool overrideBackButton = false; // for properly overriding the automatic "go back" functionality of KEY_B button presses
+    inline bool disableHiding = false; // for manually disabling the hide overlay functionality
 
     // Theme color variable definitions
     //static bool disableColorfulLogo = false;
@@ -8394,7 +8395,7 @@ namespace tsl {
                     this->m_stateChangedListener(this->m_state);
                     this->triggerClickAnimation();
                     
-                    return true;
+                    return Element::onClick(keys);
                 }
                 //if (keys & KEY_B) {
                 //    triggerRumbleDoubleClick.store(true, std::memory_order_release);
@@ -11451,7 +11452,7 @@ namespace tsl {
             // reinitialize audio for changes from handheld to docked and vise versa
             if (!ult::limitedMemory && ult::useSoundEffects)
                 reloadIfDockedChangedNow.store(true, std::memory_order_release);
-                //ult::AudioPlayer::reloadIfDockedChanged();
+                //ult::Audio::reloadIfDockedChanged();
 
 
             if (this->m_disableNextAnimation) {
@@ -12482,7 +12483,8 @@ namespace tsl {
                         this->hide();
                     }
             #else
-                    this->hide();
+                    if (!disableHiding)
+                        this->hide();
             #endif
                 }
                 ult::stillTouching.store(true, std::memory_order_release);
@@ -12909,7 +12911,7 @@ namespace tsl {
 
             // Initialize the audio service
             if (ult::useSoundEffects && !ult::limitedMemory) {
-                ult::AudioPlayer::initialize();
+                ult::Audio::initialize();
             }
 
             tsl::hlp::loadEntryKeyCombos();
@@ -13295,34 +13297,34 @@ namespace tsl {
                             triggerMoveSound.exchange(false, std::memory_order_acq_rel);
                         } else {
                             if (reloadIfDockedChangedNow.exchange(false, std::memory_order_acq_rel)) {
-                                ult::AudioPlayer::reloadIfDockedChanged();
+                                ult::Audio::reloadIfDockedChanged();
                             }
                             if (reloadSoundCacheNow.exchange(false, std::memory_order_acq_rel)) {
-                                ult::AudioPlayer::reloadAllSounds();
+                                ult::Audio::reloadAllSounds();
                             }
 
                             if (triggerNavigationSound.exchange(false)) {
-                                ult::AudioPlayer::playNavigateSound();
+                                ult::Audio::playNavigateSound();
                             } else if (triggerEnterSound.exchange(false)) {
-                                ult::AudioPlayer::playEnterSound();
+                                ult::Audio::playEnterSound();
                             } else if (triggerExitSound.exchange(false)) {
-                                ult::AudioPlayer::playExitSound();
+                                ult::Audio::playExitSound();
                             } else if (triggerWallSound.exchange(false)) {
-                                ult::AudioPlayer::playWallSound();
+                                ult::Audio::playWallSound();
                             } else if (triggerOnSound.exchange(false)) {
-                                ult::AudioPlayer::playOnSound();
+                                ult::Audio::playOnSound();
                             } else if (triggerOffSound.exchange(false)) {
-                                ult::AudioPlayer::playOffSound();
+                                ult::Audio::playOffSound();
                             } else if (triggerSettingsSound.exchange(false)) {
-                                ult::AudioPlayer::playSettingsSound();
+                                ult::Audio::playSettingsSound();
                             } else if (triggerMoveSound.exchange(false)) {
-                                ult::AudioPlayer::playMoveSound();
+                                ult::Audio::playMoveSound();
                             }
 
                             //if (clearSoundCacheNow.exchange(false, std::memory_order_acq_rel)) {
-                            //    //ult::AudioPlayer::unloadAllSounds(ult::AudioPlayer::SoundType::Wall);
-                            //    ult::AudioPlayer::unloadAllSounds({ult::AudioPlayer::SoundType::Wall});
-                            //    //ult::AudioPlayer::unloadAllSounds();
+                            //    //ult::Audio::unloadAllSounds(ult::Audio::SoundType::Wall);
+                            //    ult::Audio::unloadAllSounds({ult::Audio::SoundType::Wall});
+                            //    //ult::Audio::unloadAllSounds();
                             //    //clearSoundCacheNow.store(false, std::memory_order_release);
                             //    clearSoundCacheNow.notify_all();
                             //}
@@ -13330,7 +13332,7 @@ namespace tsl {
                     }
 
                     //else if (triggerNavigationSound.exchange(false)) {
-                    //    ult::AudioPlayer::playSlideSound();
+                    //    ult::Audio::playSlideSound();
                     //}
                     
                     // Combine inputs from both controllers
@@ -13457,8 +13459,10 @@ namespace tsl {
                         #endif
                         
                         if (shData->overlayOpen) {
-                            tsl::Overlay::get()->hide();
-                            shData->overlayOpen = false;
+                            if (!disableHiding) {
+                                tsl::Overlay::get()->hide();
+                                shData->overlayOpen = false;
+                            }
                         }
                         else {
                             eventFire(&shData->comboEvent);
@@ -14390,7 +14394,7 @@ namespace tsl {
 
             if (directMode && !launchComboHasTriggered.load(std::memory_order_acquire)) {
                 if (!disableSound.load(std::memory_order_acquire) && ult::useSoundEffects)
-                    ult::AudioPlayer::playExitSound();
+                    ult::Audio::playExitSound();
                 if (ult::useHapticFeedback) {
                     ult::rumbleDoubleClickStandalone();
                 }
@@ -14496,7 +14500,7 @@ extern "C" {
 
         //deinitHaptics();
         if (!ult::limitedMemory)
-            ult::AudioPlayer::exit();
+            ult::Audio::exit();
 
         
         //socketExit();
