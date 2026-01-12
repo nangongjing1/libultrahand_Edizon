@@ -15,7 +15,7 @@
  *   altered or removed.
  *
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #include <tsl_utils.hpp>
@@ -260,7 +260,8 @@ namespace ult {
     bool useRightAlignment = false;
     bool useSwipeToOpen = true;
     bool useLaunchCombos = true;
-    bool useNotifications = true;
+    bool useNotifications = false;
+    bool useStartupNotification = false;
     bool useSoundEffects = true;
     bool useHapticFeedback = false;
     bool usePageSwap = false;
@@ -305,8 +306,11 @@ namespace ult {
     std::atomic<bool> inSubSettingsMenu{false};
     std::atomic<bool> inOverlaysPage{false};
     std::atomic<bool> inPackagesPage{false};
+
+    std::atomic<bool> hasNextPageButton{false};
     
     bool firstBoot = true; // for detecting first boot
+    bool reloadingBoot = false; // for detecting reloading boots
     
     //std::unordered_map<std::string, std::string> hexSumCache;
     
@@ -532,7 +536,8 @@ namespace ult {
     std::string OPTIONS = "Options";
     std::string FAILED_TO_OPEN = "Failed to open file";
     std::string LAUNCH_COMBOS = "Launch Combos";
-    std::string NOTIFICATIONS = "Notifications";
+    std::string STARTUP_NOTIFICATION = "Startup Notification";
+    std::string EXTERNAL_NOTIFICATIONS = "External Notifications";
     std::string SOUND_EFFECTS = "Sound Effects";
     std::string HAPTIC_FEEDBACK = "Haptic Feedback";
     std::string OPAQUE_SCREENSHOTS = "Opaque Screenshots";
@@ -565,6 +570,7 @@ namespace ult {
     std::string PACKAGE_TITLES = "Package Titles";
 
     std::string ULTRAHAND_HAS_STARTED = "Ultrahand has started.";
+    std::string ULTRAHAND_HAS_RESTARTED = "Ultrahand has restarted.";
     std::string NEW_UPDATE_IS_AVAILABLE = "New update is available!";
     //std::string REBOOT_IS_REQUIRED = "Reboot is required.";
     //std::string HOLD_A_TO_DELETE = "Hold \uE0E0 to Delete";
@@ -761,7 +767,8 @@ namespace ult {
         FAILED_TO_OPEN = "Failed to open file";
 
         LAUNCH_COMBOS = "Launch Combos";
-        NOTIFICATIONS = "Notifications";
+        STARTUP_NOTIFICATION = "Startup Notification";
+        EXTERNAL_NOTIFICATIONS = "External Notifications";
         SOUND_EFFECTS = "Sound Effects";
         HAPTIC_FEEDBACK = "Haptic Feedback";
         OPAQUE_SCREENSHOTS = "Opaque Screenshots";
@@ -808,6 +815,7 @@ namespace ult {
         //PACKAGE_VERSIONS = "Package Versions";
 
         ULTRAHAND_HAS_STARTED = "Ultrahand has started.";
+        ULTRAHAND_HAS_RESTARTED = "Ultrahand has reloaded.";
         NEW_UPDATE_IS_AVAILABLE = "New update is available!";
         //REBOOT_IS_REQUIRED = "Reboot is required.";
         //HOLD_A_TO_DELETE = "Hold  to Delete";
@@ -987,7 +995,8 @@ namespace ult {
             {"FAILED_TO_OPEN", &FAILED_TO_OPEN},
 
             {"LAUNCH_COMBOS", &LAUNCH_COMBOS},
-            {"NOTIFICATIONS", &NOTIFICATIONS},
+            {"STARTUP_NOTIFICATION", &STARTUP_NOTIFICATION},
+            {"EXTERNAL_NOTIFICATIONS", &EXTERNAL_NOTIFICATIONS},
             {"SOUND_EFFECTS", &SOUND_EFFECTS},
             {"HAPTIC_FEEDBACK", &HAPTIC_FEEDBACK},
             {"OPAQUE_SCREENSHOTS", &OPAQUE_SCREENSHOTS},
@@ -1020,6 +1029,7 @@ namespace ult {
             {"PACKAGE_TITLES", &PACKAGE_TITLES},
 
             {"ULTRAHAND_HAS_STARTED", &ULTRAHAND_HAS_STARTED},
+            {"ULTRAHAND_HAS_RESTARTED", &ULTRAHAND_HAS_RESTARTED},
             {"NEW_UPDATE_IS_AVAILABLE", &NEW_UPDATE_IS_AVAILABLE},
             //{"REBOOT_IS_REQUIRED", &REBOOT_IS_REQUIRED},
             //{"HOLD_A_TO_DELETE", &HOLD_A_TO_DELETE},
@@ -1800,6 +1810,13 @@ namespace ult {
         if (success) {
             heapSizeCache.cachedSize = heapSize;
             heapSizeCache.initialized = true;
+
+            // Create reloading flag to indicate this was an intentional restart
+            ult::createDirectory(ult::FLAGS_PATH);
+            f = fopen(ult::RELOADING_FLAG_FILEPATH.c_str(), "wb");
+            if (f) {
+                fclose(f);  // Empty file, just needs to exist
+            }
         }
         
         return success;
@@ -1817,8 +1834,7 @@ namespace ult {
         u8 flag = 1;
         bool success = (fwrite(&flag, 1, 1, f) == 1);
         fclose(f);
-
-
+        
         deleteFileOrDirectory(NOTIFICATIONS_FLAG_FILEPATH);
         
         return success;

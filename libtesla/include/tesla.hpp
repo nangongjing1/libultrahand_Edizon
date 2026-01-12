@@ -15,7 +15,7 @@
  *   Note: Please be aware that this notice cannot be altered or removed. It is a part
  *   of the project's documentation and must remain intact.
  *
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 /**
@@ -219,6 +219,11 @@ inline std::atomic<bool> triggerRumbleDoubleClick{false};
 static inline void triggerNavigationFeedback() {
     triggerRumbleClick.store(true, std::memory_order_release);
     triggerNavigationSound.store(true, std::memory_order_release);
+}
+
+static inline void triggerWallFeedback() {
+    triggerRumbleClick.store(true, std::memory_order_release);
+    triggerWallSound.store(true, std::memory_order_release);
 }
 
 static inline void triggerEnterFeedback() {
@@ -641,7 +646,10 @@ namespace tsl {
         // Helper lambda to safely get string values
         auto getStringValue = [&](const std::string& key, const std::string& defaultValue = "") -> std::string {
             if (ultrahandSection.count(key) > 0) {
-                return ultrahandSection.at(key);
+                const std::string& value = ultrahandSection.at(key);
+                if (!value.empty()) {
+                    return value;
+                }
             }
             return defaultValue;
         };
@@ -649,7 +657,10 @@ namespace tsl {
         // Helper lambda to safely get boolean values
         auto getBoolValue = [&](const std::string& key, bool defaultValue = false) -> bool {
             if (ultrahandSection.count(key) > 0) {
-                return (ultrahandSection.at(key) == ult::TRUE_STR);
+                const std::string& value = ultrahandSection.at(key);
+                if (!value.empty()) {
+                    return (value == ult::TRUE_STR);
+                }
             }
             return defaultValue;
         };
@@ -680,9 +691,10 @@ namespace tsl {
         
         // Set Ultrahand Globals using loaded section (defaults match initialization function)
         ult::useLaunchCombos = getBoolValue("launch_combos", true);       // TRUE_STR default
-        ult::useNotifications = getBoolValue("notifications", true);       // TRUE_STR default
+        ult::useNotifications = getBoolValue("notifications", false);       // TRUE_STR default
         if (ult::useNotifications) {
             if (!ult::isFile(ult::NOTIFICATIONS_FLAG_FILEPATH)) {
+                //ult::createDirectory(ult::FLAGS_PATH);
                 FILE* file = std::fopen((ult::NOTIFICATIONS_FLAG_FILEPATH).c_str(), "w");
                 if (file) {
                     std::fclose(file);
@@ -2475,10 +2487,10 @@ namespace tsl {
                                                       long long r2_scaled, const Color& color, u8 base_a)
             {
                 int hits = 0;
-                long long dx1 = px2 + sx - cx2;
-                long long dx2 = px2 - sx - cx2;
-                long long dy1 = py2 + sy - cy2;
-                long long dy2 = py2 - sy - cy2;
+                const long long dx1 = px2 + sx - cx2;
+                const long long dx2 = px2 - sx - cx2;
+                const long long dy1 = py2 + sy - cy2;
+                const long long dy2 = py2 - sy - cy2;
                 
                 if (dx1*dx1 + dy1*dy1 <= r2_scaled) ++hits;
                 if (dx1*dx1 + dy2*dy2 <= r2_scaled) ++hits;
@@ -4348,8 +4360,9 @@ namespace tsl {
                 this->m_highlightShakingDirection = direction;
                 this->m_highlightShakingStartTime = armTicksToNs(armGetSystemTick()); // Changed
                 if (direction != FocusDirection::None && m_isItem) {
-                    triggerRumbleClick.store(true, std::memory_order_release);
-                    triggerWallSound.store(true, std::memory_order_release);
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerWallSound.store(true, std::memory_order_release);
+                    triggerWallFeedback();
                 }
             }
             
@@ -4914,30 +4927,7 @@ namespace tsl {
         }
 
         #endif
-
-       //struct TopCache {
-       //    std::string title;
-       //    std::string subtitle;
-       //    tsl::Color titleColor{0xF, 0xF, 0xF, 0xF}; // white by default
-       //    bool widgetDrawn = false;
-       //    bool useDynamicLogo = false;
-       //    bool disabled = false;
-       //};
-       //
-       //struct BottomCache {
-       //    std::string bottomText;
-       //    float backWidth = 0.0f;
-       //    float selectWidth = 0.0f;
-       //    float nextPageWidth = 0.0f;
-       //    bool disabled = false;
-       //};
-       //
-       //// Global or namespace-level variable
-       //inline TopCache g_cachedTop;
-       //inline BottomCache g_cachedBottom;
-       //
-       //inline std::atomic<bool> g_disableMenuCacheOnReturn = false;
-    
+        
         /**
          * @brief The base frame which can contain another view
          *
@@ -4958,13 +4948,13 @@ namespace tsl {
         #if IS_LAUNCHER_DIRECTIVE
             std::string m_menuMode; // CUSTOM MODIFICATION
             std::string m_colorSelection; // CUSTOM MODIFICATION
-            std::string m_pageLeftName; // CUSTOM MODIFICATION
-            std::string m_pageRightName; // CUSTOM MODIFICATION
-            
             
             tsl::Color titleColor = {0xF,0xF,0xF,0xF};
             float letterWidth;
         #endif
+
+            std::string m_pageLeftName; // CUSTOM MODIFICATION
+            std::string m_pageRightName; // CUSTOM MODIFICATION
         
         #if USING_WIDGET_DIRECTIVE
             bool m_showWidget = false;
@@ -4978,8 +4968,8 @@ namespace tsl {
             OverlayFrame(const std::string& title, const std::string& subtitle, const bool& _noClickableItems=false, const std::string& menuMode = "", const std::string& colorSelection = "", const std::string& pageLeftName = "", const std::string& pageRightName = "")
                 : Element(), m_title(title), m_subtitle(subtitle), m_noClickableItems(_noClickableItems), m_menuMode(menuMode), m_colorSelection(colorSelection), m_pageLeftName(pageLeftName), m_pageRightName(pageRightName) {
         #else
-            OverlayFrame(const std::string& title, const std::string& subtitle, const bool& _noClickableItems=false)
-                : Element(), m_title(title), m_subtitle(subtitle), m_noClickableItems(_noClickableItems) {
+            OverlayFrame(const std::string& title, const std::string& subtitle, const bool& _noClickableItems=false, const std::string& pageLeftName = "", const std::string& pageRightName = "")
+                : Element(), m_title(title), m_subtitle(subtitle), m_noClickableItems(_noClickableItems), m_pageLeftName(pageLeftName), m_pageRightName(pageRightName) {
         #endif
                     ult::activeHeaderHeight = 97;
                     ult::loadWallpaperFileWhenSafe();
@@ -5211,8 +5201,13 @@ namespace tsl {
                 
             #if IS_LAUNCHER_DIRECTIVE
                 // Handle optional next page button when in launcher mode and appropriate conditions are met
-                if (!interpreterIsRunningNow && (ult::inMainMenu.load(std::memory_order_acquire) ||
-                                                 !m_pageLeftName.empty() || !m_pageRightName.empty())) {
+                const bool hasNextPage = !interpreterIsRunningNow && (ult::inMainMenu.load(std::memory_order_acquire) ||
+                                         !m_pageLeftName.empty() || !m_pageRightName.empty());
+                
+                if (hasNextPage != ult::hasNextPageButton.load(std::memory_order_acquire))
+                    ult::hasNextPageButton.store(hasNextPage, std::memory_order_release);
+                
+                if (hasNextPage) {
                     // Construct next-page label inline without creating temporary strings
                     const float _nextPageWidth = renderer->getTextDimensions(
                             !m_pageLeftName.empty() ? ("\uE0ED" + ult::GAP_2 + m_pageLeftName) :
@@ -5239,6 +5234,34 @@ namespace tsl {
                                                   _nextPageWidth-2,
                                                   73.0f, 12.0f, a(clickColor));
                     }
+                }
+            #else
+                // NON-LAUNCHER
+                const bool hasNextPage = !m_pageLeftName.empty() || !m_pageRightName.empty();
+
+                if (hasNextPage != ult::hasNextPageButton.load(std::memory_order_acquire))
+                    ult::hasNextPageButton.store(hasNextPage, std::memory_order_release);
+                
+                if (hasNextPage) {
+                    const float _nextPageWidth = renderer->getTextDimensions(
+                            !m_pageLeftName.empty() ? ("\uE0ED" + ult::GAP_2 + m_pageLeftName) :
+                                                     ("\uE0EE" + ult::GAP_2 + m_pageRightName),
+                            false, 23).first + gapWidth;
+            
+                    if (_nextPageWidth != ult::nextPageWidth.load(std::memory_order_acquire))
+                        ult::nextPageWidth.store(_nextPageWidth, std::memory_order_release);
+                    
+                    // Draw next-page button if touched
+                    if (ult::touchingNextPage.load(std::memory_order_acquire)) {
+                        float nextX = buttonStartX+2 - _halfGap + _backWidth +1;
+                        if (!m_noClickableItems)
+                            nextX += _selectWidth;
+                
+                        renderer->drawRoundedRect(nextX, buttonY, _nextPageWidth-2, 73.0f, 12.0f, a(clickColor));
+                    }
+                } else {
+                    // Button doesn't exist, ensure width is reset to prevent stale touch regions
+                    ult::nextPageWidth.store(0.0f, std::memory_order_release);
                 }
             #endif
                 
@@ -5272,10 +5295,8 @@ namespace tsl {
                             : "");
             #else
                 const std::string currentBottomLine =
-                    "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 +
-                    (!m_noClickableItems
-                        ? "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1
-                        : "");
+                    "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 + (!m_noClickableItems ? "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1 : "") +
+                    (!m_pageLeftName.empty() ? "\uE0ED" + ult::GAP_2 + m_pageLeftName : !m_pageRightName.empty() ? "\uE0EE" + ult::GAP_2 + m_pageRightName : "");
             #endif
                 
                 // Render the text - it starts halfGap inside the first button, so edgePadding + halfGap
@@ -5392,17 +5413,17 @@ namespace tsl {
             ScrollState titleScroll = {0, 0, 0.0f, 0, 0, false, false, ""};
             
             // Unified width calculation
-            void calcScrollWidth(gfx::Renderer* r, ScrollState& s, const std::string& text, u32 fontSize, bool widgetDrawn) {
+            void calcScrollWidth(gfx::Renderer* renderer, ScrollState& s, const std::string& text, u32 fontSize, bool widgetDrawn) {
                 if (s.maxW) return;
                 
                 s.maxW = widgetDrawn ? 217 : (tsl::cfg::FramebufferWidth - 40);
                 
-                const u32 w = r->getTextDimensions(text, false, fontSize).first;
+                const u32 w = renderer->getTextDimensions(text, false, fontSize).first;
                 s.trunc = w > s.maxW;
                 
                 if (s.trunc) {
                     s.scrollText = text + "        ";
-                    s.textW = r->getTextDimensions(s.scrollText, false, fontSize).first;
+                    s.textW = renderer->getTextDimensions(s.scrollText, false, fontSize).first;
                     s.scrollText += text;
                 } else {
                     s.textW = w;
@@ -5434,9 +5455,10 @@ namespace tsl {
                     default: return defaultPackageColor;
                 }
             }
+        #endif
             
             // Draw scrollable text with common parameters
-            void drawScrollableText(gfx::Renderer* r, ScrollState& s, const tsl::Color& clr, 
+            void drawScrollableText(gfx::Renderer* renderer, ScrollState& s, const tsl::Color& clr, 
                                    int xPos, int yPos, u32 fontSize, int scissorYOffset, int scissorHeight) {
                 if (s.trunc) {
                     if (!s.active) {
@@ -5444,35 +5466,15 @@ namespace tsl {
                         s.timeIn = armTicksToNs(armGetSystemTick());
                     }
                     
-                    r->enableScissoring(xPos, yPos - scissorYOffset, s.maxW, scissorHeight);
-                    r->drawString(s.scrollText, false, xPos - static_cast<s32>(s.offset), yPos, fontSize, clr);
-                    r->disableScissoring();
+                    renderer->enableScissoring(xPos, yPos - scissorYOffset, s.maxW, scissorHeight);
+                    renderer->drawString(s.scrollText, false, xPos - static_cast<s32>(s.offset), yPos, fontSize, clr);
+                    renderer->disableScissoring();
                     
                     updateScroll(s);
                 } else {
-                    r->drawString(m_title, false, xPos, yPos, fontSize, clr);
+                    renderer->drawString(m_title, false, xPos, yPos, fontSize, clr);
                 }
             }
-        #else
-            // Non-launcher version
-            void drawScrollableText(gfx::Renderer* r, ScrollState& s, const tsl::Color& clr, 
-                                   int xPos, int yPos, u32 fontSize, int scissorYOffset, int scissorHeight) {
-                if (s.trunc) {
-                    if (!s.active) {
-                        s.active = true;
-                        s.timeIn = armTicksToNs(armGetSystemTick());
-                    }
-                    
-                    r->enableScissoring(xPos, yPos - scissorYOffset, s.maxW, scissorHeight);
-                    r->drawString(s.scrollText, false, xPos - static_cast<s32>(s.offset), yPos, fontSize, clr);
-                    r->disableScissoring();
-                    
-                    updateScroll(s);
-                } else {
-                    r->drawString(m_title, false, xPos, yPos, fontSize, clr);
-                }
-            }
-        #endif
             
             // Unified scroll update
             void updateScroll(ScrollState& s) {
@@ -5953,14 +5955,14 @@ namespace tsl {
 
         static std::atomic<float> s_currentScrollVelocity{0};
         static std::atomic<bool> s_directionalKeyReleased{false};
-        static std::atomic<bool> lastInternalTouchRelease(true);
+        static std::atomic<bool> lastInternalTouchRelease{true};
 
         static std::mutex s_safeToSwapMutex;
         static std::atomic<bool> s_safeToSwap{false};
         static std::atomic<bool> skipOnce{false};
 
         static std::atomic<bool> isTableScrolling{false};
-        static bool s_triggerShakeOnce;
+        //static bool s_triggerShakeOnce;
 
         class List : public Element {
         
@@ -6401,8 +6403,11 @@ namespace tsl {
 
             //static constexpr float smoothingFactor = 0.15f;
             //static constexpr float dampingFactor = 0.3f;
-            static constexpr float TABLE_SCROLL_STEP_SIZE = 10;
-            static constexpr float TABLE_SCROLL_STEP_SIZE_CLICK = 22;
+            //static constexpr float TABLE_SCROLL_STEP_SIZE = 4;
+            //static constexpr float TABLE_SCROLL_STEP_SIZE_CLICK = 22;
+            static constexpr float TABLE_SCROLL_SPEED_PPS = 120.0f*4;      // Pixels per second when holding
+            static constexpr float TABLE_SCROLL_SPEED_CLICK_PPS = 120.0f*4; // Pixels per second for single click
+
             static constexpr float BOTTOM_PADDING = 7.0f;
             static constexpr float VIEW_CENTER_OFFSET = 7.0f;
 
@@ -6527,11 +6532,26 @@ namespace tsl {
                 const bool currentlyAtWall = (m_lastNavigationResult == NavigationResult::HitBoundary) && 
                                               (m_stoppedAtBoundary || m_justArrivedAtBoundary);
                 
+                static bool triggerOnce = true;
                 // Detect transition from "not at wall" to "at wall" - trigger flash ONCE
                 if (currentlyAtWall && !m_scrollbarAtWall && !s_directionalKeyReleased.load(std::memory_order_acquire)) {
                     //m_scrollbarAtWall = true;
                     m_scrollbarColorTransition = 1.0f;  // Instant jump to wall color
                     //m_lastWallReleaseTime = armTicksToNs(armGetSystemTick());  // Start transition immediately
+
+                    if (triggerOnce) {
+                        // NEW: Trigger wall effect here based on scroll position
+                        const float maxOffset = static_cast<float>(m_listHeight - getHeight());
+                        if (m_offset <= 0.0f) {
+                            triggerWallEffect(FocusDirection::Up);
+                        } else if (m_offset >= maxOffset - 1.0f) {
+                            triggerWallEffect(FocusDirection::Down);
+                        }
+                        //isTableScrolling.store(false, std::memory_order_release);
+                    }
+                    triggerOnce = false;
+                } else {
+                    triggerOnce = true;
                 }
 
                 // Detect transition from "not at wall" to "at wall" - trigger flash ONCE
@@ -6586,15 +6606,13 @@ namespace tsl {
             
             inline void updateScrollAnimation() {
                 if (Element::getInputMode() == InputMode::Controller) {
-                    // Clear touch flag when in controller mode
                     m_touchScrollActive = false;
                     
-                    // Calculate distance to target
                     const float diff = m_nextOffset - m_offset;
                     const float distance = std::abs(diff);
                     
-                    // ENHANCED BOUNDARY SNAPPING: More aggressive snapping for boundaries
-                    if (distance < 1.0f) {  // Increased threshold from 0.5f
+                    // Boundary snapping
+                    if (distance < 1.0f) {
                         m_offset = m_nextOffset;
                         m_scrollVelocity = 0.0f;
                         s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
@@ -6606,10 +6624,9 @@ namespace tsl {
                         return;
                     }
                     
-                    // SPECIAL CASE: If target is exactly 0 or max, be more aggressive
                     const float maxOffset = static_cast<float>(m_listHeight - getHeight());
                     if (m_nextOffset == 0.0f || m_nextOffset == maxOffset) {
-                        if (distance < 3.0f) {  // Larger snap zone for boundaries
+                        if (distance < 3.0f) {
                             m_offset = m_nextOffset;
                             m_scrollVelocity = 0.0f;
                             s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
@@ -6618,25 +6635,21 @@ namespace tsl {
                                 invalidate();
                                 prevOffset = m_offset;
                             }
-
                             return;
                         }
                     }
                     
-                    // Emergency correction if item is going out of bounds
+                    // Emergency correction
                     if (m_focusedIndex < m_items.size()) {
                         float itemTop = 0.0f;
                         for (size_t i = 0; i < m_focusedIndex; ++i) {
                             itemTop += m_items[i]->getHeight();
                         }
                         const float itemBottom = itemTop + m_items[m_focusedIndex]->getHeight();
-                        
-                        //float viewTop = m_offset;
                         const float viewBottom = m_offset + getHeight();
                         
                         if (itemTop < m_offset || itemBottom > viewBottom) {
                             const float emergencySpeed = (itemBottom < m_offset || itemTop > viewBottom) ? 0.9f : 0.6f;
-                            
                             m_offset += diff * emergencySpeed;
                             m_scrollVelocity = diff * 0.3f;
                             s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
@@ -6649,36 +6662,43 @@ namespace tsl {
                         }
                     }
                     
-                    // Rest of your existing smooth scrolling logic...
-                    const bool isLargeJump = distance > getHeight() * 1.5f;
-                    const bool isFromRest = std::abs(m_scrollVelocity) < 2.0f;
+                    const bool isTableScrolling = tsl::elm::isTableScrolling.load(std::memory_order_acquire);
                     
-                    if (isLargeJump && isFromRest) {
-                        static constexpr float gentleAcceleration = 0.08f;
-                        static constexpr float gentleDamping = 0.85f;
-                        
-                        const float targetVelocity = diff * gentleAcceleration;
-                        m_scrollVelocity += (targetVelocity - m_scrollVelocity) * gentleDamping;
+                    if (isTableScrolling) {
+                        // Direct assignment - instant updates, smoothness comes from small frequent steps
+                        m_offset = m_nextOffset;
+                        m_scrollVelocity = 0.0f;
                     } else {
-                        const float urgency = std::min(distance / getHeight(), 1.0f);
-                        const float accelerationFactor = 0.18f + (0.24f * urgency);
-                        const float dampingFactor = 0.48f - (0.18f * urgency);
+                        // Original smooth scrolling for regular navigation
+                        const bool isLargeJump = distance > getHeight() * 1.5f;
+                        const bool isFromRest = std::abs(m_scrollVelocity) < 2.0f;
                         
-                        const float targetVelocity = diff * accelerationFactor;
-                        m_scrollVelocity += (targetVelocity - m_scrollVelocity) * dampingFactor;
+                        if (isLargeJump && isFromRest) {
+                            static constexpr float gentleAcceleration = 0.08f;
+                            static constexpr float gentleDamping = 0.85f;
+                            
+                            const float targetVelocity = diff * gentleAcceleration;
+                            m_scrollVelocity += (targetVelocity - m_scrollVelocity) * gentleDamping;
+                        } else {
+                            const float urgency = std::min(distance / getHeight(), 1.0f);
+                            const float accelerationFactor = 0.18f + (0.24f * urgency);
+                            const float dampingFactor = 0.48f - (0.18f * urgency);
+                            
+                            const float targetVelocity = diff * accelerationFactor;
+                            m_scrollVelocity += (targetVelocity - m_scrollVelocity) * dampingFactor;
+                        }
+                        
+                        m_offset += m_scrollVelocity;
                     }
                     
-                    // Apply velocity
-                    m_offset += m_scrollVelocity;
-                    
-                    // ENHANCED overshoot prevention with better boundary handling
+                    // Overshoot prevention
                     if ((m_scrollVelocity > 0 && m_offset > m_nextOffset) ||
                         (m_scrollVelocity < 0 && m_offset < m_nextOffset)) {
                         m_offset = m_nextOffset;
                         m_scrollVelocity = 0.0f;
                     }
                     
-                    // ADDITIONAL: Force exact boundary values
+                    // Force exact boundary values
                     if (m_nextOffset == 0.0f && m_offset < 1.0f) {
                         m_offset = 0.0f;
                         m_scrollVelocity = 0.0f;
@@ -6686,11 +6706,10 @@ namespace tsl {
                         m_offset = maxOffset;
                         m_scrollVelocity = 0.0f;
                     }
-
+            
                     s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
                 
                 } else if (Element::getInputMode() == InputMode::TouchScroll) {
-                    // Your existing touch scroll logic...
                     m_offset = m_nextOffset;
                     m_scrollVelocity = 0.0f;
                     
@@ -6698,7 +6717,6 @@ namespace tsl {
                         const float viewCenter = m_offset + (getHeight() / 2.0f);
                         float accumHeight = 0.0f;
                         
-                        //float itemHeight, itemCenter;
                         for (size_t i = 0; i < m_items.size(); ++i) {
                             const float itemHeight = m_items[i]->getHeight();
                             const float itemCenter = accumHeight + (itemHeight / 2.0f);
@@ -6761,11 +6779,14 @@ namespace tsl {
             }
             
             inline void triggerWallEffect(FocusDirection direction) {
-                triggerRumbleClick.store(true, std::memory_order_release);
-                triggerWallSound.store(true, std::memory_order_release);
+                //triggerRumbleClick.store(true, std::memory_order_release);
+                //triggerWallSound.store(true, std::memory_order_release);
+                
             
-                if (m_items.empty())
+                if (m_items.empty()) {
+                    triggerWallFeedback();
                     return;
+                }
             
                 // Directional search bounds
                 ssize_t i  = static_cast<ssize_t>(m_focusedIndex);
@@ -6780,8 +6801,10 @@ namespace tsl {
                         return;
                     }
                 }
+
+                triggerWallFeedback();
             }
-                                                                                                                                                        
+            
             inline Element* handleDownFocus(Element* oldFocus) {
                 const bool atBottom = isAtBottom();
                 updateHoldState();
@@ -6804,8 +6827,21 @@ namespace tsl {
                 if (result != oldFocus) {
                     m_lastNavigationResult = NavigationResult::Success;
                     m_stoppedAtBoundary = false;
-                    s_triggerShakeOnce = true;
-                    m_justArrivedAtBoundary = isAtBottom();
+                    //s_triggerShakeOnce = true;
+                    
+                    // NEW: Check if we just navigated to the last focusable item
+                    // If so, set boundary flag regardless of scroll position
+                    bool isLastFocusableItem = true;
+                    for (size_t i = m_focusedIndex + 1; i < m_items.size(); ++i) {
+                        if (m_items[i]->m_isItem) {
+                            isLastFocusableItem = false;
+                            break;
+                        }
+                    }
+                    
+                    // Set boundary flag if we're at last focusable item OR at scroll bottom
+                    m_justArrivedAtBoundary = isLastFocusableItem || isAtBottom();
+                    
                     triggerNavigationFeedback();
                     return result;
                 }
@@ -6813,7 +6849,7 @@ namespace tsl {
                 // Check if we can still scroll down
                 if (!atBottom) {
                     scrollDown();
-                    s_triggerShakeOnce = true;
+                    //s_triggerShakeOnce = true;
                     return oldFocus;
                 }
                 
@@ -6821,9 +6857,10 @@ namespace tsl {
                 if (m_justArrivedAtBoundary) {
                     m_justArrivedAtBoundary = false;
                     m_stoppedAtBoundary = true;
-                    s_triggerShakeOnce = false;
+                    //s_triggerShakeOnce = false;
                     m_lastNavigationResult = NavigationResult::HitBoundary;
-                    triggerWallEffect(FocusDirection::Down);
+                    if (m_listHeight <= getHeight())
+                        triggerWallEffect(FocusDirection::Down);
                     return oldFocus;
                 }
                 
@@ -6832,7 +6869,7 @@ namespace tsl {
                     s_directionalKeyReleased.store(false, std::memory_order_release);
                     m_hasWrappedInCurrentSequence = true;
                     m_lastNavigationResult = NavigationResult::Wrapped;
-                    s_triggerShakeOnce = true;
+                    //s_triggerShakeOnce = true;
                     return handleJumpToTop(oldFocus);
                 }
                 
@@ -6840,12 +6877,11 @@ namespace tsl {
                 m_lastNavigationResult = NavigationResult::HitBoundary;
                 if (m_isHolding) {
                     m_stoppedAtBoundary = true;
-                    if (s_triggerShakeOnce) {
-                        s_triggerShakeOnce = false;
-                        triggerWallEffect(FocusDirection::Down);
-                    }
-                } else {
-                    s_triggerShakeOnce = true;
+                    //if (s_triggerShakeOnce) {
+                    //    s_triggerShakeOnce = false;
+                    //}
+                //} else {
+                //    s_triggerShakeOnce = true;
                 }
                 
                 return oldFocus;
@@ -6872,8 +6908,21 @@ namespace tsl {
                 if (result != oldFocus) {
                     m_lastNavigationResult = NavigationResult::Success;
                     m_stoppedAtBoundary = false;
-                    s_triggerShakeOnce = true;
-                    m_justArrivedAtBoundary = isAtTop();
+                    //s_triggerShakeOnce = true;
+                    
+                    // NEW: Check if we just navigated to the first focusable item
+                    // If so, set boundary flag regardless of scroll position
+                    bool isFirstFocusableItem = true;
+                    for (size_t i = 0; i < m_focusedIndex; ++i) {
+                        if (m_items[i]->m_isItem) {
+                            isFirstFocusableItem = false;
+                            break;
+                        }
+                    }
+                    
+                    // Set boundary flag if we're at first focusable item OR at scroll top
+                    m_justArrivedAtBoundary = isFirstFocusableItem || isAtTop();
+                    
                     triggerNavigationFeedback();
                     return result;
                 }
@@ -6881,7 +6930,7 @@ namespace tsl {
                 // Check if we can still scroll up
                 if (!atTop) {
                     scrollUp();
-                    s_triggerShakeOnce = true;
+                    //s_triggerShakeOnce = true;
                     return oldFocus;
                 }
                 
@@ -6889,9 +6938,10 @@ namespace tsl {
                 if (m_justArrivedAtBoundary) {
                     m_justArrivedAtBoundary = false;
                     m_stoppedAtBoundary = true;
-                    s_triggerShakeOnce = false;
+                    //s_triggerShakeOnce = false;
                     m_lastNavigationResult = NavigationResult::HitBoundary;
-                    triggerWallEffect(FocusDirection::Up);
+                    if (m_listHeight <= getHeight())
+                        triggerWallEffect(FocusDirection::Up);
                     return oldFocus;
                 }
                 
@@ -6900,7 +6950,7 @@ namespace tsl {
                     s_directionalKeyReleased.store(false, std::memory_order_release);
                     m_hasWrappedInCurrentSequence = true;
                     m_lastNavigationResult = NavigationResult::Wrapped;
-                    s_triggerShakeOnce = true;
+                    //s_triggerShakeOnce = true;
                     return handleJumpToBottom(oldFocus);
                 }
                 
@@ -6908,12 +6958,11 @@ namespace tsl {
                 m_lastNavigationResult = NavigationResult::HitBoundary;
                 if (m_isHolding) {
                     m_stoppedAtBoundary = true;
-                    if (s_triggerShakeOnce) {
-                        s_triggerShakeOnce = false;
-                        triggerWallEffect(FocusDirection::Up);
-                    }
-                } else {
-                    s_triggerShakeOnce = true;
+                    //if (s_triggerShakeOnce) {
+                    //    s_triggerShakeOnce = false;
+                    //}
+                //} else {
+                //    s_triggerShakeOnce = true;
                 }
                 
                 return oldFocus;
@@ -7045,6 +7094,17 @@ namespace tsl {
             // Core navigation logic
             // Optimized version with variable definitions pulled outside the loop
             inline Element* navigateDown(Element* oldFocus) {
+                // Synchronize m_focusedIndex with actual focus before navigating
+                //if (oldFocus) {
+                //    for (size_t i = 0; i < m_items.size(); ++i) {
+                //        if (m_items[i] == oldFocus) {
+                //            m_focusedIndex = i;
+                //            break;
+                //        }
+                //    }
+                //}
+                
+
                 size_t searchIndex = m_focusedIndex + 1;
                 
                 // If currently on a table that needs more scrolling
@@ -7056,6 +7116,17 @@ namespace tsl {
                         return oldFocus;
                     }
                 }
+
+               // Sync AFTER table check - if we're not mid-table-scroll
+               if (oldFocus && !isTableScrolling.load(std::memory_order_acquire)) {
+                   for (size_t i = 0; i < m_items.size(); ++i) {
+                       if (m_items[i] == oldFocus) {
+                           m_focusedIndex = i;
+                           searchIndex = i + 1;
+                           break;
+                       }
+                   }
+               }
                 
                 // Cache invariant values (legitimate optimization)
                 const s32 viewBottom = getBottomBound();
@@ -7101,6 +7172,17 @@ namespace tsl {
             }
             
             inline Element* navigateUp(Element* oldFocus) {
+                // Synchronize m_focusedIndex with actual focus before navigating
+                //if (oldFocus) {
+                //    for (size_t i = 0; i < m_items.size(); ++i) {
+                //        if (m_items[i] == oldFocus) {
+                //            m_focusedIndex = i;
+                //            break;
+                //        }
+                //    }
+                //}
+
+
                 if (m_focusedIndex == 0) return oldFocus;
                 ssize_t searchIndex = static_cast<ssize_t>(m_focusedIndex) - 1;
                 
@@ -7113,6 +7195,17 @@ namespace tsl {
                         return oldFocus;
                     }
                 }
+
+               // Sync AFTER table check - if we're not mid-table-scroll
+               if (oldFocus && !isTableScrolling.load(std::memory_order_acquire)) {
+                   for (size_t i = 0; i < m_items.size(); ++i) {
+                       if (m_items[i] == oldFocus) {
+                           m_focusedIndex = i;
+                           searchIndex = static_cast<ssize_t>(i) - 1;
+                           break;
+                       }
+                   }
+               }
                 
                 // Cache invariant values (legitimate optimization)
                 const s32 viewTop = getTopBound();
@@ -7175,7 +7268,7 @@ namespace tsl {
             //inline bool canScrollUp() {
             //    return (m_nextOffset > 0.1f) || (m_offset > 0.1f);
             //}
-            
+
             
             //u64 m_lastScrollNavigationTime = 0;
             //bool m_isHoldingOnTable = false;
@@ -7184,21 +7277,23 @@ namespace tsl {
             inline void scrollDown() {
                 const u64 currentTime = armTicksToNs(armGetSystemTick());
                 
-                // Calculate frame time
-                float frameTimeMs = 0.0f;
+                // Calculate delta time in seconds
+                float deltaTime = 0.0f;
                 if (m_lastScrollTime != 0) {
-                    frameTimeMs = static_cast<float>(currentTime - m_lastScrollTime) / 1000000.0f;
+                    const u64 deltaTimeNs = currentTime - m_lastScrollTime;
+                    deltaTime = static_cast<float>(deltaTimeNs) / 1000000000.0f; // Convert to seconds
+                } else {
+                    // First frame - assume 60fps
+                    deltaTime = 1.0f / 60.0f;
                 }
                 m_lastScrollTime = currentTime;
                 
-                // Use original frame-based amounts
-                float scrollAmount = m_isHolding ? TABLE_SCROLL_STEP_SIZE : TABLE_SCROLL_STEP_SIZE_CLICK;
+                // Clamp delta time to prevent huge jumps on lag spikes
+                deltaTime = std::min(deltaTime, 0.1f); // Cap at 100ms (10fps minimum)
                 
-                // If frame took longer than ~33ms (slower than 30fps), scale up the scroll amount
-                if (frameTimeMs > 33.0f) {
-                    const float scaleFactor = frameTimeMs / 16.67f;  // 16.67ms = 60fps baseline
-                    scrollAmount *= std::min(scaleFactor, 3.0f);  // Cap at 3x for very slow frames
-                }
+                // Calculate scroll amount: pixels_per_second * seconds_elapsed
+                const float speedPPS = m_isHolding ? TABLE_SCROLL_SPEED_PPS : TABLE_SCROLL_SPEED_CLICK_PPS;
+                const float scrollAmount = speedPPS * deltaTime;
                 
                 m_nextOffset = std::min(m_nextOffset + scrollAmount, 
                                        static_cast<float>(m_listHeight - getHeight()));
@@ -7207,21 +7302,23 @@ namespace tsl {
             inline void scrollUp() {
                 const u64 currentTime = armTicksToNs(armGetSystemTick());
                 
-                // Calculate frame time
-                float frameTimeMs = 0.0f;
+                // Calculate delta time in seconds
+                float deltaTime = 0.0f;
                 if (m_lastScrollTime != 0) {
-                    frameTimeMs = static_cast<float>(currentTime - m_lastScrollTime) / 1000000.0f;
+                    const u64 deltaTimeNs = currentTime - m_lastScrollTime;
+                    deltaTime = static_cast<float>(deltaTimeNs) / 1000000000.0f; // Convert to seconds
+                } else {
+                    // First frame - assume 60fps
+                    deltaTime = 1.0f / 60.0f;
                 }
                 m_lastScrollTime = currentTime;
                 
-                // Use original frame-based amounts
-                float scrollAmount = m_isHolding ? TABLE_SCROLL_STEP_SIZE : TABLE_SCROLL_STEP_SIZE_CLICK;
+                // Clamp delta time to prevent huge jumps on lag spikes
+                deltaTime = std::min(deltaTime, 0.1f); // Cap at 100ms (10fps minimum)
                 
-                // If frame took longer than ~33ms (slower than 30fps), scale up the scroll amount
-                if (frameTimeMs > 33.0f) {
-                    const float scaleFactor = frameTimeMs / 16.67f;  // 16.67ms = 60fps baseline
-                    scrollAmount *= std::min(scaleFactor, 3.0f);  // Cap at 3x for very slow frames
-                }
+                // Calculate scroll amount: pixels_per_second * seconds_elapsed
+                const float speedPPS = m_isHolding ? TABLE_SCROLL_SPEED_PPS : TABLE_SCROLL_SPEED_CLICK_PPS;
+                const float scrollAmount = speedPPS * deltaTime;
                 
                 m_nextOffset = std::max(m_nextOffset - scrollAmount, 0.0f);
             }
@@ -7257,16 +7354,18 @@ namespace tsl {
                     return oldFocus;
             
                 const float oldOffset = m_nextOffset;
+                
+                // Set focused index - check if we need to point at a table or non-focusable element after the last item
                 m_focusedIndex = lastFocusableIndex;
-
-                // NEW: Check if there's a table after the focused item
-                if (lastFocusableIndex + 1 < m_items.size()) {
-                    Element* nextItem = m_items[lastFocusableIndex + 1];
-                    if (nextItem->isTable()) {
-                        m_focusedIndex = lastFocusableIndex + 1;  // Point at the table
+                
+                // Search forward from last focusable item to find tables/gaps that extend below
+                for (size_t i = lastFocusableIndex + 1; i < m_items.size(); ++i) {
+                    m_focusedIndex = i;  // Point at the table/gap, just like navigateDown does
+                    if (m_items[i]->isTable()) {
+                        isTableScrolling.store(true, std::memory_order_release);
                     }
                 }
-
+                
                 m_nextOffset = targetOffset;
                 
                 Element* newFocus = m_items[lastFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
@@ -7274,8 +7373,6 @@ namespace tsl {
                 // Trigger feedback if offset or focus changed
                 if ((newFocus && newFocus != oldFocus) ||
                     (std::abs(m_nextOffset - oldOffset) > tolerance)) {
-                    //triggerRumbleClick.store(true, std::memory_order_release);
-                    //triggerNavigationSound.store(true, std::memory_order_release);
                     triggerNavigationFeedback();
                 }
             
@@ -7313,7 +7410,20 @@ namespace tsl {
                     return oldFocus;
             
                 const float oldOffset = m_nextOffset;
+                
+                // Set focused index - check if we need to point at a table/gap before the first focusable item
                 m_focusedIndex = firstFocusableIndex;
+                
+                // Search backward from first focusable item to find tables/gaps that extend above
+                if (firstFocusableIndex > 0) {
+                    for (ssize_t i = static_cast<ssize_t>(firstFocusableIndex) - 1; i >= 0; --i) {
+                        m_focusedIndex = static_cast<size_t>(i);  // Point at the table/gap, just like navigateUp does
+                        if (m_items[i]->isTable()) {
+                            isTableScrolling.store(true, std::memory_order_release);
+                        }
+                    }
+                }
+                
                 m_nextOffset = targetOffset;
             
                 Element* newFocus = m_items[firstFocusableIndex]->requestFocus(oldFocus, FocusDirection::None);
@@ -7321,14 +7431,13 @@ namespace tsl {
                 // Trigger feedback if offset or focus changed
                 if ((newFocus && newFocus != oldFocus) ||
                     (std::abs(m_nextOffset - oldOffset) > tolerance)) {
-                    //triggerRumbleClick.store(true, std::memory_order_release);
-                    //triggerNavigationSound.store(true, std::memory_order_release);
                     triggerNavigationFeedback();
                 }
             
                 return newFocus ? newFocus : oldFocus;
             }
             
+
             Element* handleSkipDown(Element* oldFocus) {
                 if (m_items.empty()) return oldFocus;
             
@@ -7577,7 +7686,6 @@ namespace tsl {
             }
             
             
-            // Keep your EXACT original updateScrollOffset() method unchanged:
             virtual void updateScrollOffset() {
                 if (Element::getInputMode() != InputMode::Controller) return;
                 
@@ -7642,23 +7750,10 @@ namespace tsl {
             u32 width, height;
             u64 m_touchStartTime_ns;
             bool isLocked = false;
-            bool m_shortThresholdCrossed = false;
-            #if IS_LAUNCHER_DIRECTIVE
-            bool m_longThresholdCrossed = false;
-            #endif
 
-        #if IS_LAUNCHER_DIRECTIVE
-            ListItem(const std::string& text, const std::string& value = "", bool isMini = false, bool useScriptKey = true)
-                : Element(), m_text(text), m_value(value), m_listItemHeight(isMini ? tsl::style::MiniListItemDefaultHeight : tsl::style::ListItemDefaultHeight) {
-                m_isItem = true;
-                m_flags.m_useScriptKey = useScriptKey;
-                m_flags.m_useClickAnimation = true;
-                m_text_clean = m_text;
-                ult::removeTag(m_text_clean);
-                applyInitialTranslations();
-                if (!value.empty()) applyInitialTranslations(true);
-            }
-        #else
+            u64 m_shortHoldKey = KEY_Y;
+            u64 m_longHoldKey = KEY_X;
+
             ListItem(const std::string& text, const std::string& value = "", bool isMini = false)
                 : Element(), m_text(text), m_value(value), m_listItemHeight(isMini ? tsl::style::MiniListItemDefaultHeight : tsl::style::ListItemDefaultHeight) {
                 m_isItem = true;
@@ -7668,18 +7763,32 @@ namespace tsl {
                 applyInitialTranslations();
                 if (!value.empty()) applyInitialTranslations(true);
             }
-        #endif
+            
         
             virtual ~ListItem() = default;
         
             virtual void draw(gfx::Renderer *renderer) override {
                 const bool useClickTextColor = m_flags.m_touched && Element::getInputMode() == InputMode::Touch && ult::touchInBounds;
                 
-                if (useClickTextColor) [[unlikely]] {
+                if (useClickTextColor && !m_isTouchHolding) [[unlikely]] {
                     auto drawFunc = ult::expandedMemory ? &gfx::Renderer::drawRectMultiThreaded : &gfx::Renderer::drawRect;
                     (renderer->*drawFunc)(this->getX() + 4, this->getY(), this->getWidth() - 8, this->getHeight(), aWithOpacity(clickColor));
                 }
-        
+                
+                #if IS_LAUNCHER_DIRECTIVE
+
+                if (m_isTouchHolding) [[unlikely]] {
+                    // Determine the active percentage to use
+                    const float activePercentage = ult::displayPercentage.load(std::memory_order_acquire);
+                    if (activePercentage > 0){
+                        if (ult::expandedMemory)
+                            renderer->drawRectMultiThreaded(this->getX() + 4, this->getY(), (this->getWidth()- 12 +4)*(activePercentage * 0.01f), this->getHeight(), aWithOpacity(progressColor)); // Direct percentage conversion
+                        else
+                            renderer->drawRect(this->getX() + 4, this->getY(), (this->getWidth()- 12 +4)*(activePercentage * 0.01f), this->getHeight(), aWithOpacity(progressColor)); // Direct percentage conversion
+                    }
+                }
+                #endif
+
                 const s16 yOffset = ((tsl::style::ListItemDefaultHeight - m_listItemHeight) >> 1) + 1;
         
                 if (!m_maxWidth) [[unlikely]] {
@@ -7768,44 +7877,48 @@ namespace tsl {
                 if (event == TouchEvent::Touch) [[likely]] {
                     if ((m_flags.m_touched = inBounds(currX, currY))) [[likely]] {
                         m_touchStartTime_ns = armTicksToNs(armGetSystemTick());
+                        //m_touchHoldStartTick = armGetSystemTick();  // Start tracking hold
+                        m_isTouchHolding = false;  // Will be set to true when hold activates
                         m_shortThresholdCrossed = false;
-                        #if IS_LAUNCHER_DIRECTIVE
                         m_longThresholdCrossed = false;
-                        #endif
+                        triggerNavigationFeedback();
                     }
-                    return false;
                 }
-            
+                
                 if (event == TouchEvent::Hold && m_flags.m_touched) [[likely]] {
                     const u64 touchDuration_ns = armTicksToNs(armGetSystemTick()) - m_touchStartTime_ns;
                     const float touchDurationInSeconds = static_cast<float>(touchDuration_ns) * 1e-9f;
                     
-                #if IS_LAUNCHER_DIRECTIVE
-                    if (!m_longThresholdCrossed && touchDurationInSeconds >= 1.0f && 
-                        (ult::inMainMenu.load(std::memory_order_acquire) || (ult::inHiddenMode.load(std::memory_order_acquire) && !ult::inSettingsMenu.load(std::memory_order_acquire) && !ult::inSubSettingsMenu.load(std::memory_order_acquire)))) [[unlikely]] {
+                    // Activate touch hold immediately when Hold event fires
+                    if (m_usingTouchHolding && !m_isTouchHolding && touchDurationInSeconds >= 0.1f) {
+                        m_isTouchHolding = true;
+                        // Trigger the click with KEY_A to start hold behavior
+                        
+                        return onClick(KEY_A);
+                    }
+                    
+                    if (m_flags.m_useLongThreshold && !m_longThresholdCrossed && touchDurationInSeconds >= 1.0f) [[unlikely]] {
                         m_longThresholdCrossed = true;
                         triggerRumbleClick.store(true, std::memory_order_release);
-                    } else
-                #endif
-                    if (!m_shortThresholdCrossed && touchDurationInSeconds >= 0.5f) [[unlikely]] {
+                    } else if (m_flags.m_useShortThreshold && !m_shortThresholdCrossed && touchDurationInSeconds >= 0.5f) [[unlikely]] {
                         m_shortThresholdCrossed = true;
                         triggerRumbleClick.store(true, std::memory_order_release);
                     }
-                    return false;
+                    
+                    return true;  // Keep handling hold
                 }
             
                 if (event == TouchEvent::Release && m_flags.m_touched) [[likely]] {
                     m_flags.m_touched = false;
+                    const bool wasHolding = m_isTouchHolding;
+                    m_isTouchHolding = false;  // Stop tracking hold on release
+                    
                     if (Element::getInputMode() == InputMode::Touch) [[likely]] {
-                        const bool handled = onClick(determineKeyOnTouchRelease(
-                            #if IS_LAUNCHER_DIRECTIVE
-                            m_flags.m_useScriptKey
-                            #else
-                            false
-                            #endif
-                        ));
                         m_clickAnimationProgress = 0;
-                        return handled;
+                        // Only trigger normal click if we weren't in a hold
+                        if (!wasHolding) {
+                            return onClick(determineKeyOnTouchRelease());
+                        }
                     }
                 }
                 return false;
@@ -7868,6 +7981,44 @@ namespace tsl {
             inline void enableClickAnimation() {
                 m_flags.m_useClickAnimation = true;
             }
+
+            inline void enableShortHoldKey() {
+                m_flags.m_useShortThreshold = true;
+            }
+
+            inline void disableShortHoldKey() {
+                m_flags.m_useShortThreshold = false;
+            }
+
+            inline void enableLongHoldKey() {
+                m_flags.m_useLongThreshold = true;
+            }
+
+            inline void disableLongHoldKey() {
+                m_flags.m_useLongThreshold = false;
+            }
+
+            inline void enableTouchHolding() {
+                m_usingTouchHolding = true;
+            }
+
+            inline void disableTouchHolding() {
+                m_usingTouchHolding = false;
+            }
+
+            inline bool isTouchHolding() const noexcept {
+                return m_isTouchHolding;
+            }
+            
+            //inline u64 getTouchHoldStartTick() const noexcept {
+            //    return m_touchHoldStartTick;
+            //}
+            
+            inline void resetTouchHold() {
+                m_isTouchHolding = false;
+                //m_touchHoldStartTick = 0;
+            }
+
             
             inline const std::string& getText() const noexcept {
                 return m_text;
@@ -7906,6 +8057,8 @@ namespace tsl {
             std::string m_ellipsisText;
             u16 m_listItemHeight;  // Changed from u32 to u16
 
+            bool m_shortThresholdCrossed = false;
+            bool m_longThresholdCrossed = false;
             
             // Bitfield for boolean flags - saves ~7 bytes per instance
             struct {
@@ -7916,9 +8069,8 @@ namespace tsl {
                 bool m_hasCustomTextColor : 1;
                 bool m_hasCustomValueColor : 1;
                 bool m_useClickAnimation : 1;
-            #if IS_LAUNCHER_DIRECTIVE
-                bool m_useScriptKey : 1;
-            #endif
+                bool m_useShortThreshold : 1;
+                bool m_useLongThreshold : 1;
             } m_flags = {};
         
             Color m_customTextColor = {0};
@@ -7927,6 +8079,10 @@ namespace tsl {
             float m_scrollOffset = 0.0f;
             u16 m_maxWidth = 0;     // Changed from u32 to u16
             u16 m_textWidth = 0;     // Changed from u32 to u16
+
+            bool m_usingTouchHolding = false;
+            bool m_isTouchHolding = false;
+            //u64 m_touchHoldStartTick = 0;
         
         private:
             // Consolidated scroll constants struct
@@ -8096,7 +8252,8 @@ namespace tsl {
                 const s32 xPosition = getX() + m_maxWidth + 47;
                 const s32 yPosition = getY() + 45 - yOffset-1;
                 static constexpr s32 fontSize = 20;
-        
+            
+            #if IS_LAUNCHER_DIRECTIVE
                 static bool lastRunningInterpreter = false;
                 const auto textColor = determineValueTextColor(useClickTextColor, lastRunningInterpreter);
         
@@ -8107,21 +8264,36 @@ namespace tsl {
                     drawThrobber(renderer, xPosition, yPosition, fontSize, textColor);
                 }
                 lastRunningInterpreter = ult::runningInterpreter.load(std::memory_order_acquire);
+            #else
+                const auto textColor = determineValueTextColor(useClickTextColor);
+                if (m_value != ult::INPROGRESS_SYMBOL) [[likely]] {
+                    static const std::vector<std::string> specialChars = {ult::DIVIDER_SYMBOL};
+                    renderer->drawStringWithColoredSections(m_value, false, specialChars, xPosition, yPosition, fontSize, textColor, textSeparatorColor);
+                } else {
+                    drawThrobber(renderer, xPosition, yPosition, fontSize, textColor);
+                }
+            #endif
             }
-                    
-            Color determineValueTextColor(bool useClickTextColor, bool lastRunningInterpreter) const {
+        
+        #if IS_LAUNCHER_DIRECTIVE
+            Color determineValueTextColor(bool useClickTextColor, bool lastRunningInterpreter=false) const {
+        #else
+            Color determineValueTextColor(bool useClickTextColor) const {
+        #endif
                 if (m_focused && ult::useSelectionValue) {
                     if (m_value == ult::DROPDOWN_SYMBOL || m_value == ult::OPTION_SYMBOL) {
                         return useClickTextColor ? (clickTextColor) :
                                (m_flags.m_faint ? offTextColor : (useClickTextColor ? clickTextColor : (ult::useSelectionText ? selectedTextColor : defaultTextColor)));
                     }
                     
+                #if IS_LAUNCHER_DIRECTIVE
                     const bool isRunning = ult::runningInterpreter.load(std::memory_order_acquire) || lastRunningInterpreter;
                     if (isRunning && (m_value.find(ult::DOWNLOAD_SYMBOL) != std::string::npos ||
                                      m_value.find(ult::UNZIP_SYMBOL) != std::string::npos ||
                                      m_value.find(ult::COPY_SYMBOL) != std::string::npos)) {
                         return m_flags.m_faint ? offTextColor : (inprogressTextColor);
                     }
+                #endif
                     
                     if (m_value == ult::INPROGRESS_SYMBOL) {
                         return m_flags.m_faint ? offTextColor : (inprogressTextColor);
@@ -8143,12 +8315,14 @@ namespace tsl {
                            (useClickTextColor ? clickTextColor : (m_flags.m_faint ? offTextColor : defaultTextColor)));
                 }
                 
+            #if IS_LAUNCHER_DIRECTIVE
                 const bool isRunning = ult::runningInterpreter.load(std::memory_order_acquire) || lastRunningInterpreter;
                 if (isRunning && (m_value.find(ult::DOWNLOAD_SYMBOL) != std::string::npos ||
                                  m_value.find(ult::UNZIP_SYMBOL) != std::string::npos ||
                                  m_value.find(ult::COPY_SYMBOL) != std::string::npos)) {
                     return m_flags.m_faint ? offTextColor : (inprogressTextColor);
                 }
+            #endif
                 
                 if (m_value == ult::INPROGRESS_SYMBOL) {
                     return m_flags.m_faint ? offTextColor : (inprogressTextColor);
@@ -8168,19 +8342,21 @@ namespace tsl {
                 renderer->drawString(throbberSymbol, false, xPosition, yPosition, fontSize, textColor);
             }
             
-            s64 determineKeyOnTouchRelease(bool useScriptKey) const {
+            s64 determineKeyOnTouchRelease() const {
                 const u64 touchDuration_ns = armTicksToNs(armGetSystemTick()) - m_touchStartTime_ns;
                 const float touchDurationInSeconds = static_cast<float>(touchDuration_ns) * 1e-9f;
                 
-                #if IS_LAUNCHER_DIRECTIVE
-                if (touchDurationInSeconds >= 1.0f) [[unlikely]] {
-                    ult::longTouchAndRelease.store(true, std::memory_order_release);
-                    return useScriptKey ? SCRIPT_KEY : STAR_KEY;
+                if (m_flags.m_useLongThreshold) {
+                    if (touchDurationInSeconds >= 1.0f) {
+                        ult::longTouchAndRelease.store(true, std::memory_order_release);
+                        return m_longHoldKey;
+                    }
                 }
-                #endif
-                if (touchDurationInSeconds >= 0.5f) [[unlikely]] {
-                    ult::shortTouchAndRelease.store(true, std::memory_order_release);
-                    return useScriptKey ? SCRIPT_KEY : SETTINGS_KEY;
+                if (m_flags.m_useShortThreshold) {
+                    if (touchDurationInSeconds >= 0.5f) {
+                        ult::shortTouchAndRelease.store(true, std::memory_order_release);
+                        return m_shortHoldKey;
+                    }
                 }
                 return KEY_A;
             }
@@ -8194,16 +8370,8 @@ namespace tsl {
         
         class MiniListItem : public ListItem {
         public:
-        #if IS_LAUNCHER_DIRECTIVE
-            // Constructor for MiniListItem, with no `isMini` boolean.
-            MiniListItem(const std::string& text, const std::string& value = "", bool useScriptKey = false) 
-                : ListItem(text, value, true, useScriptKey) { // Call the parent constructor with `isMini = true`
-        #else
             MiniListItem(const std::string& text, const std::string& value = "")
                 : ListItem(text, value, true) {  // Call the parent constructor with `isMini = true`
-        #endif
-            
-                // Additional MiniListItem-specific initialization can go here, if necessary.
             }
             
             // Destructor if needed (inherits default behavior from ListItem)
@@ -8226,22 +8394,6 @@ namespace tsl {
              * @param isMini Whether to use mini list item height
              * @param useScriptKey Whether to use script key (launcher only)
              */
-        #if IS_LAUNCHER_DIRECTIVE
-            ListItemV2(const std::string& text, 
-                       const std::string& value = "", 
-                       Color valueColor = onTextColor, 
-                       Color faintColor = offTextColor,
-                       bool isMini = false,
-                       bool useScriptKey = true)
-                : ListItem(text, value, isMini, useScriptKey),
-                  m_valueColorOverride(valueColor),
-                  m_faintColorOverride(faintColor),
-                  m_hasColorOverrides(true) {
-                
-                // Set the custom value color on the base ListItem
-                setValueColor(valueColor);
-            }
-        #else
             ListItemV2(const std::string& text, 
                        const std::string& value = "", 
                        Color valueColor = onTextColor, 
@@ -8255,7 +8407,6 @@ namespace tsl {
                 // Set the custom value color on the base ListItem
                 setValueColor(valueColor);
             }
-        #endif
         
             virtual ~ListItemV2() = default;
         
@@ -8330,22 +8481,12 @@ namespace tsl {
          */
         class MiniListItemV2 : public ListItemV2 {
         public:
-        #if IS_LAUNCHER_DIRECTIVE
-            MiniListItemV2(const std::string& text, 
-                           const std::string& value = "", 
-                           Color valueColor = onTextColor, 
-                           Color faintColor = offTextColor,
-                           bool useScriptKey = false)
-                : ListItemV2(text, value, valueColor, faintColor, true, useScriptKey) {
-            }
-        #else
             MiniListItemV2(const std::string& text, 
                            const std::string& value = "", 
                            Color valueColor = onTextColor, 
                            Color faintColor = offTextColor)
                 : ListItemV2(text, value, valueColor, faintColor, true) {
             }
-        #endif
         
             virtual ~MiniListItemV2() {}
         };
@@ -10821,7 +10962,7 @@ namespace tsl {
         
             // Quick reject using atomics (fast-path)
             if (!enabled_.load(std::memory_order_acquire)) return;
-            if (!ult::useNotifications) return;
+            //if (!ult::useNotifications) return;
             if (generation_ != notificationGeneration.load(std::memory_order_acquire)) return;
         
             NotificationData data;
@@ -11128,7 +11269,7 @@ namespace tsl {
         }
     
         bool isActive() const {
-            if (!ult::useNotifications) return false;
+            //if (!ult::useNotifications) return false;
             if (generation_ != notificationGeneration.load(std::memory_order_acquire)) return false;
             std::lock_guard<std::mutex> lg(state_mutex_);
             if (is_active_) return true;
@@ -11301,8 +11442,12 @@ namespace tsl {
                 }
             }
             
-            if (shake && oldFocus == this->m_focusedElement && this->m_focusedElement != nullptr)
-                this->m_focusedElement->shakeHighlight(direction);
+            if (shake && oldFocus == this->m_focusedElement && this->m_focusedElement != nullptr) {
+                if (!tsl::elm::isTableScrolling.load(std::memory_order_acquire)) {
+                    this->m_focusedElement->shakeHighlight(direction);
+                }
+                //this->m_focusedElement->shakeHighlight(direction);
+            }
         }
         
         /**
@@ -11831,8 +11976,9 @@ namespace tsl {
         #if IS_STATUS_MONITOR_DIRECTIVE
             if (FullMode && !deactivateOriginalFooter) {
                 if ((keysDown & ALL_KEYS_MASK) && ult::stillTouching && ult::currentForeground.load(std::memory_order_acquire)) {
-                    triggerRumbleClick.store(true, std::memory_order_release);
-                    triggerWallSound.store(true, std::memory_order_release);
+                    //triggerRumbleClick.store(true, std::memory_order_release);
+                    //triggerWallSound.store(true, std::memory_order_release);
+                    triggerWallFeedback();
                     return;
                 }
 
@@ -11869,8 +12015,9 @@ namespace tsl {
                 keysDown |= KEY_B;
 
             if ((keysDown & ALL_KEYS_MASK) && ult::stillTouching && ult::currentForeground.load(std::memory_order_acquire)) {
-                triggerRumbleClick.store(true, std::memory_order_release);
-                triggerWallSound.store(true, std::memory_order_release);
+                //triggerRumbleClick.store(true, std::memory_order_release);
+                //triggerWallSound.store(true, std::memory_order_release);
+                triggerWallFeedback();
                 return;
             }
 
@@ -11919,7 +12066,8 @@ namespace tsl {
             if (!currentFocus && !ult::simulatedBack.load(std::memory_order_acquire) && !ult::stillTouching.load(std::memory_order_acquire) && !oldTouchDetected && !interpreterIsRunning) {
                 if (!topElement) return;
                 
-                if (!currentGui->initialFocusSet() || keysDown & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT)) {
+                // Only set initial focus if NO directional keys are pressed
+                if (!currentGui->initialFocusSet() && !(keysDown & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT))) {
                     currentGui->requestFocus(topElement, FocusDirection::None);
                     currentGui->markInitialFocusSet();
                 }
@@ -12012,13 +12160,14 @@ namespace tsl {
                             if (keysHeld & KEY_UP && !(keysHeld & ~KEY_UP & ALL_KEYS_MASK))
                                 currentGui->requestFocus(topElement, FocusDirection::Up, shouldShake);
                             else if (keysHeld & KEY_DOWN && !(keysHeld & ~KEY_DOWN & ALL_KEYS_MASK)) {
-                                currentGui->requestFocus(currentFocus->getParent(), FocusDirection::Down, shouldShake);
+                                // FIXED: Use topElement instead of currentFocus->getParent() when no focus exists
+                                currentGui->requestFocus(currentFocus ? currentFocus->getParent() : topElement, FocusDirection::Down, shouldShake);
                                 //isTopElement = false;
                             }
                             else if (keysHeld & KEY_LEFT && !(keysHeld & ~KEY_LEFT & ALL_KEYS_MASK))
-                                currentGui->requestFocus(currentFocus->getParent(), FocusDirection::Left, shouldShake);
+                                currentGui->requestFocus(currentFocus ? currentFocus->getParent() : topElement, FocusDirection::Left, shouldShake);
                             else if (keysHeld & KEY_RIGHT && !(keysHeld & ~KEY_RIGHT & ALL_KEYS_MASK))
-                                currentGui->requestFocus(currentFocus->getParent(), FocusDirection::Right, shouldShake);
+                                currentGui->requestFocus(currentFocus ? currentFocus->getParent() : topElement, FocusDirection::Right, shouldShake);
                         }
                         
                         if (keysHeld & ~KEY_DOWN & ~KEY_UP & ~KEY_LEFT & ~KEY_RIGHT & ALL_KEYS_MASK) // reset
@@ -12392,7 +12541,9 @@ namespace tsl {
                                        (touchPos.x >= selectLeftEdge && touchPos.x < selectRightEdge && touchPos.y > footerY) &&
                                        (initialTouchPos.x >= selectLeftEdge && initialTouchPos.x < selectRightEdge && initialTouchPos.y > footerY);
             
-            const bool nextPageTouched = (touchPos.x >= nextPageLeftEdge && touchPos.x < nextPageRightEdge && touchPos.y > footerY) &&
+
+
+            const bool nextPageTouched = ult::hasNextPageButton.load(std::memory_order_acquire) && (touchPos.x >= nextPageLeftEdge && touchPos.x < nextPageRightEdge && touchPos.y > footerY) &&
                                           (initialTouchPos.x >= nextPageLeftEdge && initialTouchPos.x < nextPageRightEdge && initialTouchPos.y > footerY);
             
             const bool menuTouched = (touchPos.x > ult::layerEdge+7U && touchPos.x <= menuRightEdge && touchPos.y > 10U && touchPos.y <= 83U) &&
@@ -12423,7 +12574,8 @@ namespace tsl {
             }
             
             if (shouldTriggerRumble) {
-                triggerRumbleClick.store(true, std::memory_order_release);
+                //triggerRumbleClick.store(true, std::memory_order_release);
+                triggerNavigationFeedback();
             }
 
             
@@ -12459,7 +12611,8 @@ namespace tsl {
                                             initialTouchPos.x <= ult::layerEdge + cfg::FramebufferWidth - 30U && 
                                             initialTouchPos.x > 40U + ult::layerEdge);
                         if (ult::touchInBounds) {
-                            triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerRumbleClick.store(true, std::memory_order_release);
+                            //triggerNavigationFeedback();
                             currentGui->removeFocus();
                         }
                     }
@@ -12467,11 +12620,12 @@ namespace tsl {
                 }
                 
                 if (currentGui && topElement && !interpreterIsRunning) {
-                    topElement->onTouch(touchEvent, touchPos.x, touchPos.y, oldTouchPos.x, oldTouchPos.y, initialTouchPos.x, initialTouchPos.y);
+                    
                     if (touchPos.x > 40U + ult::layerEdge && touchPos.x <= cfg::FramebufferWidth - 30U + ult::layerEdge && 
                         touchPos.y > 73U && touchPos.y <= footerY) {
                         currentGui->removeFocus();
                     }
+                    topElement->onTouch(touchEvent, touchPos.x, touchPos.y, oldTouchPos.x, oldTouchPos.y, initialTouchPos.x, initialTouchPos.y);
                 }
                 
                 oldTouchPos = touchPos;
@@ -12687,8 +12841,9 @@ namespace tsl {
          */
         void goBack(u32 count = 1) {
             if (ult::stillTouching && ult::currentForeground.load(std::memory_order_acquire)) {
-                triggerRumbleClick.store(true, std::memory_order_release);
-                triggerWallSound.store(true, std::memory_order_release);
+                //triggerRumbleClick.store(true, std::memory_order_release);
+                //triggerWallSound.store(true, std::memory_order_release);
+                triggerWallFeedback();
                 return;
             }
 
@@ -12734,8 +12889,9 @@ namespace tsl {
         void pop(u32 count = 1) {
 
             if (ult::stillTouching && ult::currentForeground.load(std::memory_order_acquire)) {
-                triggerRumbleClick.store(true, std::memory_order_release);
-                triggerWallSound.store(true, std::memory_order_release);
+                //triggerRumbleClick.store(true, std::memory_order_release);
+                //triggerWallSound.store(true, std::memory_order_release);
+                triggerWallFeedback();
                 return;
             }
 
@@ -13790,6 +13946,23 @@ namespace tsl {
         Overlay::get()->pop(count);
     }
         
+    /**
+     * @brief Shifts focus to a specific UI element
+     * 
+     * Requests focus on the provided element without directional navigation.
+     * Uses FocusDirection::None to set focus directly on the target element,
+     * typically centering it in the viewport without triggering navigation effects.
+     * 
+     * Useful for jumping to specific items programmatically (e.g., after search,
+     * restoring saved position, or responding to external events).
+     * 
+     * @param element The element to receive focus
+     */
+    inline void shiftItemFocus(elm::Element* element) {
+        if (auto& currentGui = Overlay::get()->getCurrentGui()) {
+            currentGui->requestFocus(element, FocusDirection::None);
+        }
+    }
     
     static inline std::mutex setNextOverlayMutex;
 
