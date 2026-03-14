@@ -723,8 +723,8 @@ namespace ult {
         {&SYSTEM_RAM,                 "SYSTEM_RAM",                 "System RAM"},
         {&FREE,                       "FREE",                       "free"},
         {&UNAVAILABLE_SELECTION,      "UNAVAILABLE_SELECTION",      "Not available"},
-        {&ON,                         "ON",                         "\uE14B"},
-        {&OFF,                        "OFF",                        "\uE14C"},
+        {&ON,                         "\uE14B",                     "\uE14B"},
+        {&OFF,                        "\uE14C",                     "\uE14C"},
         {&OK,                         "OK",                         "OK"},
         {&BACK,                       "BACK",                       "Back"},
         {&HIDE,                       "HIDE",                       "Hide"},
@@ -795,7 +795,7 @@ namespace ult {
         }
         for (size_t i = 0; i < LANG_TABLE_SIZE; ++i) {
             // 跳过对ON和OFF的语言更新
-            if (cv.first == "ON" || cv.first == "OFF") {
+            if (strcmp(LANG_TABLE[i].key, "ON") == 0 || strcmp(LANG_TABLE[i].key, "OFF") == 0) {
                 continue;
             }
             auto it = jsonMap.find(LANG_TABLE[i].key);
