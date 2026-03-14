@@ -12,7 +12,7 @@
  *   of the project's documentation and must remain intact.
  * 
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #include "debug_funcs.hpp"
@@ -31,7 +31,6 @@ namespace ult {
         char timestamp[30];
         strftime(timestamp, sizeof(timestamp), "[%Y-%m-%d %H:%M:%S] ", timeInfo);
         
-        #if !USING_FSTREAM_DIRECTIVE
         {
             std::lock_guard<std::mutex> lock(logMutex);
             
@@ -43,16 +42,6 @@ namespace ult {
                 fclose(file);
             }
         }
-        #else
-        {
-            std::lock_guard<std::mutex> lock(logMutex);
-            
-            std::ofstream file(logFilePath.c_str(), std::ios::app);
-            if (file.is_open()) {
-                file << timestamp << message << "\n";
-            }
-        }
-        #endif
     }
     
     // Overload for std::string

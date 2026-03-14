@@ -15,7 +15,7 @@
  *   of the project's documentation and must remain intact.
  * 
  *   Licensed under both GPLv2 and CC-BY-4.0
- *   Copyright (c) 2025 ppkantorski
+ *   Copyright (c) 2025-2026 ppkantorski
  ********************************************************************************/
 
 #pragma once
@@ -24,18 +24,17 @@
 #include <cstdint>
 
 namespace ult {
-	
-	//extern bool rumbleInitialized;
-	extern std::atomic<bool> clickActive;
-	extern std::atomic<bool> doubleClickActive;
-	
-	void initHaptics();
-	void deinitHaptics();
-	void checkAndReinitHaptics();
-	
-	void rumbleClick();
-	void rumbleDoubleClick();
-	void processRumbleStop(u64 nowNs);
-	void processRumbleDoubleClick(u64 nowNs);
-	void rumbleDoubleClickStandalone();
+    
+    extern std::atomic<bool> clickActive;
+    extern std::atomic<bool> doubleClickActive;
+    
+    void initHaptics();
+    void deinitHaptics();
+    void checkAndReinitHaptics();
+    
+    void rumbleClick();
+    void rumbleDoubleClick();
+    void processRumbleStop(u64 nowNs);
+    void processRumbleDoubleClick(u64 nowNs);
+    void rumbleDoubleClickStandalone();
 }

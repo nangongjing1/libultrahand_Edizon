@@ -19,15 +19,12 @@
  *   altered or removed.
  *
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2024-2025 ppkantorski
+ *  Copyright (c) 2024-2026 ppkantorski
  ********************************************************************************/
 #pragma once
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
-
-#ifndef ULTRA_HPP
-#define ULTRA_HPP
 
 // Include all functional headers used in the libUltra library
 
@@ -45,5 +42,3 @@
 #include "tsl_utils.hpp"
 #include "audio.hpp"
 #include "haptics.hpp"
-
-#endif // ULTRA_HPP

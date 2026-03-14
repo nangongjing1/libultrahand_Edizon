@@ -13,12 +13,10 @@
  *   of the project's documentation and must remain intact.
  * 
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #pragma once
-#ifndef DOWNLOAD_FUNCS_HPP
-#define DOWNLOAD_FUNCS_HPP
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -44,15 +42,10 @@
 
 namespace ult {
     // Constants for buffer sizes
-
     extern size_t DOWNLOAD_READ_BUFFER;
     extern size_t DOWNLOAD_WRITE_BUFFER;
     extern size_t UNZIP_READ_BUFFER;
     extern size_t UNZIP_WRITE_BUFFER;
-    
-    // Path to the CA certificate
-    //extern const std::string cacertPath;
-    //extern const std::string cacertURL;
     
     // Thread-safe atomic flags for operation control
     extern std::atomic<bool> abortDownload;
@@ -60,24 +53,7 @@ namespace ult {
     extern std::atomic<int> downloadPercentage;
     extern std::atomic<int> unzipPercentage;
     
-    
-    // Thread-safe callback functions
-    //#if !USING_FSTREAM_DIRECTIVE
-    //size_t writeCallback(void* ptr, size_t size, size_t nmemb, FILE* stream);
-    //#else
-    //size_t writeCallback(void* ptr, size_t size, size_t nmemb, std::ostream* stream);
-    //#endif
-    
-    //int progressCallback(void* ptr, curl_off_t totalToDownload, curl_off_t nowDownloaded, curl_off_t totalToUpload, curl_off_t nowUploaded);
-    
-    
-    // Thread-safe initialization and cleanup functions
-    //void initializeCurl();
-    //void cleanupCurl();
-    
     // Main API functions - thread-safe and optimized
     bool downloadFile(const std::string& url, const std::string& toDestination, bool noSocketInit=false, bool noPercentagePolling=false);
     bool unzipFile(const std::string& zipFilePath, const std::string& extractTo);
 }
-
-#endif // DOWNLOAD_FUNCS_HPP

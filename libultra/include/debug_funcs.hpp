@@ -12,18 +12,12 @@
  *   of the project's documentation and must remain intact.
  * 
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #pragma once
-#ifndef DEBUG_FUNCS_HPP
-#define DEBUG_FUNCS_HPP
 
-#if !USING_FSTREAM_DIRECTIVE // For not using fstream (needs implementing)
 #include <stdio.h>
-#else
-#include <fstream>
-#endif
 #include <mutex>
 #include <string>
 #include <ctime>
@@ -49,5 +43,3 @@ namespace ult {
     void logMessage(const std::string& message);
     #endif
 }
-
-#endif // DEBUG_FUNCS_HPP

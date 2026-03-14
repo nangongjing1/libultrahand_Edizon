@@ -14,21 +14,13 @@
  *   of the project's documentation and must remain intact.
  * 
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 
 #pragma once
 
-#ifndef LIST_FUNCS_HPP
-#define LIST_FUNCS_HPP
-
-#if !USING_FSTREAM_DIRECTIVE // For not using fstream (needs implementing)
 #include <stdio.h>
-#else
-#include <fstream>
-#endif
-
 #include <vector>
 #include <string>
 #include <unordered_set>
@@ -100,11 +92,5 @@ namespace ult {
     void compareFilesLists(const std::string& txtFilePath1, const std::string& txtFilePath2, const std::string& outputTxtFilePath);
 
     
-    // Helper function to read a text file and process each line with a callback
-    //void processFileLines(const std::string& filePath, const std::function<void(const std::string&)>& callback);
-
-    
     void compareWildcardFilesLists(const std::string& wildcardPatternFilePath, const std::string& txtFilePath, const std::string& outputTxtFilePath);
 }
-
-#endif

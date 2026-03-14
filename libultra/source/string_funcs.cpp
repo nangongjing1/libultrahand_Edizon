@@ -15,7 +15,7 @@
  *   of the project's documentation and must remain intact.
  * 
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #include "string_funcs.hpp"
@@ -46,28 +46,6 @@ namespace ult {
     float stof(const std::string& str) {
         return strtof(str.c_str(), nullptr);
     }
-
-
-    //bool canConvertToInt(const std::string& str) {
-    //    if (str.empty()) {
-    //        return false;
-    //    }
-    //    
-    //    size_t start = 0;
-    //    if (str[0] == '-' || str[0] == '+') {
-    //        if (str.length() == 1) return false;
-    //        start = 1;
-    //    }
-    //    
-    //    for (size_t i = start; i < str.length(); ++i) {
-    //        if (!std::isdigit(static_cast<unsigned char>(str[i]))) {
-    //            return false;
-    //        }
-    //    }
-    //    
-    //    return true;
-    //}
-
 
     // Mimics std::getline() with a delimiter
     bool StringStream::getline(std::string& output, char delimiter) {
@@ -240,36 +218,6 @@ namespace ult {
     
     
     /**
-     * @brief Replaces multiple consecutive slashes with a single slash in a string.
-     *
-     * This function replaces sequences of two or more consecutive slashes with a single slash in the input string.
-     *
-     * @param input The input string to process.
-     * @return The string with multiple slashes replaced.
-     */
-    //std::string replaceMultipleSlashes(const std::string& input) {
-    //    std::string output;
-    //    output.reserve(input.size()); // Reserve space for the output string
-    //    
-    //    bool previousSlash = false;
-    //    for (char c : input) {
-    //        if (c == '/') {
-    //            if (!previousSlash) {
-    //                output.push_back(c);
-    //            }
-    //            previousSlash = true;
-    //        } else {
-    //            output.push_back(c);
-    //            previousSlash = false;
-    //        }
-    //    }
-    //    
-    //    return output;
-    //}
-    
-    
-    
-    /**
      * @brief Preprocesses a path string by replacing multiple slashes and adding "sdmc:" prefix.
      *
      * This function preprocesses a path string by removing multiple consecutive slashes,
@@ -425,15 +373,6 @@ namespace ult {
     }
     
     
-    
-    //std::string addQuotesIfNeeded(const std::string& str) {
-    //    if (str.find(' ') != std::string::npos) {
-    //        return "\"" + str + "\"";
-    //    }
-    //    return str;
-    //}
-    
-    
     /**
      * @brief Converts a string to lowercase.
      *
@@ -445,9 +384,6 @@ namespace ult {
     
     std::string stringToLowercase(const std::string& str) {
         std::string result = str;
-        //std::transform(result.begin(), result.end(), result.begin(),
-        //               [](unsigned char c) { return std::tolower(c); });
-        //return result;
         for (char& c : result) {
             if (c >= 'A' && c <= 'Z') {
                 c += 32;
@@ -628,14 +564,4 @@ namespace ult {
         
         return result;
     }
-
-    //#if IS_LAUNCHER_DIRECTIVE
-    //std::string inputExists(const std::string& input) {
-    //    std::string e;
-    //    for (char c : input) {
-    //        e += (c + 5);
-    //    }
-    //    return e;
-    //}
-    //#endif
 }

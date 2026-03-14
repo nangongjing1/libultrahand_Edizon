@@ -12,7 +12,7 @@
  *   of the project's documentation and must remain intact.
  *
  *  Licensed under both GPLv2 and CC-BY-4.0
- *  Copyright (c) 2023-2025 ppkantorski
+ *  Copyright (c) 2023-2026 ppkantorski
  ********************************************************************************/
 
 #include "json_funcs.hpp"
@@ -30,7 +30,7 @@ namespace ult {
      */
     json_t* readJsonFromFile(const std::string& filePath) {
         std::lock_guard<std::mutex> lock(json_access_mutex);
-    #if !USING_FSTREAM_DIRECTIVE
+        
         FILE* file = fopen(filePath.c_str(), "rb");
         if (!file) {
             return nullptr;
@@ -62,37 +62,6 @@ namespace ult {
         // Ensure null termination for cJSON
         buffer[bytesRead] = '\0';
         
-    #else
-        std::ifstream file(filePath, std::ios::binary | std::ios::ate);
-        if (!file.is_open()) {
-            return nullptr;
-        }
-        
-        // Get file size from current position (end)
-        const std::streampos fileSize = file.tellg();
-        file.seekg(0, std::ios::beg);
-        
-        // Check for reasonable file size
-        if (fileSize <= 0 || fileSize > 6 * 1024 * 1024) {
-            return nullptr;
-        }
-        
-        // Use vector<char> for better performance and explicit null termination
-        std::vector<char> buffer;
-        buffer.resize(static_cast<size_t>(fileSize) + 1); // +1 for null terminator
-        
-        file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
-        
-        // Check how much was actually read
-        std::streamsize actualRead = file.gcount();
-        if (actualRead != fileSize) {
-            return nullptr;
-        }
-        
-        // Ensure null termination for cJSON
-        buffer[actualRead] = '\0';
-        file.close();
-    #endif
         
         // Parse the JSON content - pass buffer directly to avoid string copy
         cJSON* root = cJSON_Parse(buffer.data());
@@ -222,20 +191,18 @@ namespace ult {
         // FIXED: Better value type detection
         cJSON* jsonValue = nullptr;
         
-        // Trim whitespace first
-        std::string trimmedValue = value;
-        // Remove leading whitespace
-        trimmedValue.erase(0, trimmedValue.find_first_not_of(" \t\n\r"));
-        // Remove trailing whitespace  
-        trimmedValue.erase(trimmedValue.find_last_not_of(" \t\n\r") + 1);
-        
-        if (trimmedValue.empty()) {
+        // Remove trimming to preserve leading/trailing spaces for all languages
+        // std::string trimmedValue = value;
+        // trimmedValue.erase(0, trimmedValue.find_first_not_of(" \t\n\r"));
+        // trimmedValue.erase(trimmedValue.find_last_not_of(" \t\n\r") + 1);
+    
+        if (value.empty()) {
             jsonValue = cJSON_CreateString("");
-        } else if (trimmedValue == "true") {
+        } else if (value == "true") {
             jsonValue = cJSON_CreateBool(1);
-        } else if (trimmedValue == "false") {
+        } else if (value == "false") {
             jsonValue = cJSON_CreateBool(0);
-        } else if (trimmedValue == "null") {
+        } else if (value == "null") {
             jsonValue = cJSON_CreateNull();
         } else {
             // Try parsing as number (integer or float)
@@ -243,21 +210,21 @@ namespace ult {
             errno = 0;
             
             // Try as integer first
-            const long longValue = std::strtol(trimmedValue.c_str(), &endPtr, 10);
-            if (endPtr == trimmedValue.c_str() + trimmedValue.length() && errno == 0) {
+            const long longValue = std::strtol(value.c_str(), &endPtr, 10);
+            if (endPtr == value.c_str() + value.length() && errno == 0) {
                 // Successfully parsed as integer
                 jsonValue = cJSON_CreateNumber(static_cast<double>(longValue));
             } else {
                 // Try as float
                 endPtr = nullptr;
                 errno = 0;
-                const double doubleValue = std::strtod(trimmedValue.c_str(), &endPtr);
-                if (endPtr == trimmedValue.c_str() + trimmedValue.length() && errno == 0) {
+                const double doubleValue = std::strtod(value.c_str(), &endPtr);
+                if (endPtr == value.c_str() + value.length() && errno == 0) {
                     // Successfully parsed as float
                     jsonValue = cJSON_CreateNumber(doubleValue);
                 } else {
                     // Treat as string
-                    jsonValue = cJSON_CreateString(trimmedValue.c_str());
+                    jsonValue = cJSON_CreateString(value.c_str());
                 }
             }
         }
@@ -281,7 +248,7 @@ namespace ult {
         bool success = false;
         {
             std::lock_guard<std::mutex> lock(json_access_mutex);
-        #if !USING_FSTREAM_DIRECTIVE
+            
             FILE* file = fopen(filePath.c_str(), "w"); // Use text mode for JSON
             if (file) {
                 const size_t jsonLength = std::strlen(jsonString);
@@ -289,14 +256,6 @@ namespace ult {
                 success = (bytesWritten == jsonLength);
                 fclose(file);
             }
-        #else
-            std::ofstream file(filePath); // Use text mode for JSON
-            if (file.is_open()) {
-                file << jsonString;
-                success = !file.fail();
-                file.close();
-            }
-        #endif
         }
     
         cJSON_free(jsonString);
@@ -343,7 +302,7 @@ namespace ult {
 
         {
             std::lock_guard<std::mutex> lock(json_access_mutex);
-        #if !USING_FSTREAM_DIRECTIVE
+            
             FILE* file = fopen(filePath.c_str(), "w"); // Use text mode
             if (file) {
                 const size_t jsonLength = std::strlen(jsonString);
@@ -351,14 +310,6 @@ namespace ult {
                 success = (bytesWritten == jsonLength);
                 fclose(file);
             }
-        #else
-            std::ofstream file(filePath); // Use text mode
-            if (file.is_open()) {
-                file << jsonString;
-                success = !file.fail();
-                file.close();
-            }
-        #endif
         }
     
         cJSON_free(jsonString);
@@ -378,7 +329,6 @@ namespace ult {
         
         cJSON_AddStringToObject(notif, "text", text.c_str());
         cJSON_AddNumberToObject(notif, "font_size", static_cast<double>(fontSize));
-        //cJSON_AddNumberToObject(notif, "arrival_ns", static_cast<double>(armTicksToNs(tick)));
         
         // Serialize JSON
         char* rendered = cJSON_PrintUnformatted(notif);

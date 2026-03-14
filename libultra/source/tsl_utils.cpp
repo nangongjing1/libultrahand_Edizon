@@ -20,7 +20,7 @@
 
 #include <tsl_utils.hpp>
 
-#include <cstdlib>
+//#include <cstdlib>
 extern "C" { // assertion override
     void __assert_func(const char *_file, int _line, const char *_func, const char *_expr ) {
         abort();
@@ -28,6 +28,37 @@ extern "C" { // assertion override
 }
 
 namespace ult {
+
+    void formatTimestamp(time_t t, char* buf, size_t bufSize) {
+        struct tm tm;
+        localtime_r(&t, &tm);
+        int hour12 = tm.tm_hour % 12;
+        if (hour12 == 0) hour12 = 12;
+        std::snprintf(buf, bufSize, "%d:%02d %s",
+                      hour12, tm.tm_min, (tm.tm_hour >= 12) ? "PM" : "AM");
+    }
+
+    double cos(double x) {
+        //static constexpr double PI = 3.14159265358979323846;
+        static constexpr double TWO_PI = 6.28318530717958647692;
+        static constexpr double HALF_PI = 1.57079632679489661923;
+        
+        x = x - TWO_PI * static_cast<int>(x * 0.159154943091895);
+        if (x < 0) x += TWO_PI;
+        
+        int sign = 1;
+        if (x > _M_PI) {
+           x -= _M_PI;
+           sign = -1;
+        }
+        if (x > HALF_PI) {
+           x = _M_PI - x;
+           sign = -sign;
+        }
+        
+        const double x2 = x * x;
+        return sign * (1.0 + x2 * (-0.5 + x2 * (0.04166666666666666 + x2 * (-0.001388888888888889 + x2 * (0.0000248015873015873 - x2 * 0.0000002755731922398589)))));
+    }
 
     bool correctFrameSize; // for detecting the correct Overlay display size
 
@@ -40,34 +71,21 @@ namespace ult {
     std::atomic<bool> launchingOverlay(false);
     std::atomic<bool> settingsInitialized(false);
     std::atomic<bool> currentForeground(false);
-    //std::mutex simulatedNextPageMutex;
 
     // Helper function to read file content into a string
     bool readFileContent(const std::string& filePath, std::string& content) {
-        #if !USING_FSTREAM_DIRECTIVE
-            FILE* file = fopen(filePath.c_str(), "r");
-            if (!file) {
-                #if USING_LOGGING_DIRECTIVE
-                logMessage("Failed to open JSON file: " + filePath);
-                #endif
-                return false;
-            }
-            char buffer[256];
-            while (fgets(buffer, sizeof(buffer), file) != nullptr) {
-                content += buffer;
-            }
-            fclose(file);
-        #else
-            std::ifstream file(filePath);
-            if (!file.is_open()) {
-                #if USING_LOGGING_DIRECTIVE
-                logMessage("Failed to open JSON file: " + filePath);
-                #endif
-                return false;
-            }
-            content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-            file.close();
-        #endif
+        FILE* file = fopen(filePath.c_str(), "r");
+        if (!file) {
+            #if USING_LOGGING_DIRECTIVE
+            logMessage("Failed to open JSON file: " + filePath);
+            #endif
+            return false;
+        }
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), file) != nullptr) {
+            content += buffer;
+        }
+        fclose(file);
         
         return true;
     }
@@ -128,6 +146,12 @@ namespace ult {
     bool loadTranslationsFromJSON(const std::string& filePath) {
         return parseJsonToMap(filePath, translationCache);
     }
+
+    // Function to clear the translation cache
+    void clearTranslationCache() {
+        translationCache.clear();
+        translationCache.rehash(0);
+    }
     
     
     u16 activeHeaderHeight = 97;
@@ -142,94 +166,22 @@ namespace ult {
         
         return R_SUCCEEDED(rc) && (perfMode == ApmPerformanceMode_Boost);
     }
-    
-    //static bool pminfoInitialized = false;
-    //static u64 lastPid = 0;
-    //static u64 lastTid = 0;
-    //
-    //std::string getTitleIdAsString() {
-    //    Result rc;
-    //    u64 pid = 0;
-    //    u64 tid = 0;
-    //
-    //    // Get the current application PID
-    //    rc = pmdmntGetApplicationProcessId(&pid);
-    //    if (R_FAILED(rc) || pid == 0) {
-    //        return NULL_STR;
-    //    }
-    //
-    //    // If it's the same PID as last time, return cached TID
-    //    if (pid == lastPid && lastTid != 0) {
-    //        char cachedTidStr[17];
-    //        snprintf(cachedTidStr, sizeof(cachedTidStr), "%016lX", lastTid);
-    //        return std::string(cachedTidStr);
-    //    }
-    //
-    //    // Initialize pminfo if not already
-    //    if (!pminfoInitialized) {
-    //        rc = pminfoInitialize();
-    //        if (R_FAILED(rc)) {
-    //            return NULL_STR;
-    //        }
-    //        pminfoInitialized = true;
-    //    }
-    //
-    //    // Retrieve the TID (Program ID)
-    //    rc = pminfoGetProgramId(&tid, pid);
-    //    if (R_FAILED(rc)) {
-    //        return NULL_STR;
-    //    }
-    //
-    //    lastPid = pid;
-    //    lastTid = tid;
-    //
-    //    char titleIdStr[17];
-    //    snprintf(titleIdStr, sizeof(titleIdStr), "%016lX", tid);
-    //    return std::string(titleIdStr);
-    //}
-    
-    //std::string getProcessIdAsString() {
-    //    u64 pid = 0;
-    //    if (R_FAILED(pmdmntGetApplicationProcessId(&pid)))
-    //        return NULL_STR;
-    //    
-    //    char pidStr[21];  // Max u64 is 20 digits + null terminator
-    //    snprintf(pidStr, sizeof(pidStr), "%llu", pid);
-    //    return std::string(pidStr);
-    //}
 
     std::string getBuildIdAsString() {
         u64 pid = 0;
-        if (R_FAILED(pmdmntGetApplicationProcessId(&pid)))
+        if (R_FAILED(pmdmntGetApplicationProcessId(&pid)) || R_FAILED(ldrDmntInitialize()))
             return NULL_STR;
         
-        Service srv;
-        if (R_FAILED(smGetService(&srv, "dmnt:cht")))
-            return NULL_STR;
+        LoaderModuleInfo moduleInfos[2];
+        s32 count = 0;
+        Result rc = ldrDmntGetProcessModuleInfo(pid, moduleInfos, 2, &count);
+        ldrDmntExit();
         
-        if (R_FAILED(serviceDispatch(&srv, 65003))) {
-            serviceClose(&srv);
-            return NULL_STR;
-        }
-        
-        struct {
-            u64 process_id;
-            u64 title_id;
-            struct { u64 base; u64 size; } main_nso_extents;
-            struct { u64 base; u64 size; } heap_extents;
-            struct { u64 base; u64 size; } alias_extents;
-            struct { u64 base; u64 size; } address_space_extents;
-            u8 main_nso_build_id[0x20];
-        } metadata;
-        
-        Result rc = serviceDispatchOut(&srv, 65002, metadata);
-        serviceClose(&srv);
-        
-        if (R_FAILED(rc))
+        if (R_FAILED(rc) || count == 0)
             return NULL_STR;
         
         u64 buildid;
-        std::memcpy(&buildid, metadata.main_nso_build_id, sizeof(u64));
+        std::memcpy(&buildid, moduleInfos[1].build_id, sizeof(u64));
         
         char buildIdStr[17];
         snprintf(buildIdStr, sizeof(buildIdStr), "%016lX", __builtin_bswap64(buildid));
@@ -251,17 +203,16 @@ namespace ult {
     
     std::string lastTitleID;
     std::atomic<bool> resetForegroundCheck(false); // initialize as true
-
-
-    
-
     std::atomic<bool> internalTouchReleased(true);
+
     u32 layerEdge = 0;
     bool useRightAlignment = false;
     bool useSwipeToOpen = true;
     bool useLaunchCombos = true;
-    bool useNotifications = false;
-    bool useStartupNotification = false;
+    bool useNotifications = true;
+    bool useNotificationsHotkey = true;
+    bool useStartupNotification = true;
+    bool silenceNotifications = false;
     bool useSoundEffects = true;
     bool useHapticFeedback = false;
     bool usePageSwap = false;
@@ -278,25 +229,8 @@ namespace ult {
     std::string requestedOverlayArgs;
     std::mutex overlayLaunchMutex;
     #endif
-
-    // Define the duration boundaries (for smooth scrolling)
-    //const std::chrono::milliseconds initialInterval = std::chrono::milliseconds(67);  // Example initial interval
-    //const std::chrono::milliseconds shortInterval = std::chrono::milliseconds(10);    // Short interval after long hold
-    //const std::chrono::milliseconds transitionPoint = std::chrono::milliseconds(2000); // Point at which the shortest interval is reached
-    
-    // Function to interpolate between two durations
-    //std::chrono::milliseconds interpolateDuration(std::chrono::milliseconds start, std::chrono::milliseconds end, float t) {
-    //    using namespace std::chrono;
-    //    auto interpolated = start.count() + static_cast<long long>((end.count() - start.count()) * t);
-    //    return milliseconds(interpolated);
-    //}
-    
-    
-    
-    //#include <filesystem> // Comment out filesystem
     
     // CUSTOM SECTION START
-    //float backWidth, selectWidth, nextPageWidth;
     std::atomic<float> backWidth;
     std::atomic<float> selectWidth;
     std::atomic<float> nextPageWidth;
@@ -312,8 +246,6 @@ namespace ult {
     bool firstBoot = true; // for detecting first boot
     bool reloadingBoot = false; // for detecting reloading boots
     
-    //std::unordered_map<std::string, std::string> hexSumCache;
-    
     // Define an atomic bool for interpreter completion
     std::atomic<bool> threadFailure(false);
     std::atomic<bool> runningInterpreter(false);
@@ -322,10 +254,7 @@ namespace ult {
     std::atomic<bool> isHidden(false);
     std::atomic<bool> externalAbortCommands(false);
     
-    //bool progressAnimation = false;
     bool disableTransparency = false;
-    //bool useCustomWallpaper = false;
-    //bool useMemoryExpansion = false;
     bool useOpaqueScreenshots = false;
     
     std::atomic<bool> onTrackBar(false);
@@ -349,12 +278,9 @@ namespace ult {
 
     
     bool updateMenuCombos = false;
-    
-    
-    //void convertComboToUnicode(std::string& combo);
 
 
-    std::array<KeyInfo, 18> KEYS_INFO = {{
+    const std::array<KeyInfo, 18> KEYS_INFO = {{
         { HidNpadButton_L, "L", "\uE0E4" }, { HidNpadButton_R, "R", "\uE0E5" },
         { HidNpadButton_ZL, "ZL", "\uE0E6" }, { HidNpadButton_ZR, "ZR", "\uE0E7" },
         { HidNpadButton_AnySL, "SL", "\uE0E8" }, { HidNpadButton_AnySR, "SR", "\uE0E9" },
@@ -366,7 +292,7 @@ namespace ult {
         { HidNpadButton_Minus, "MINUS", "\uE0B6" }, { HidNpadButton_Plus, "PLUS", "\uE0B5" }
     }};
 
-    std::unordered_map<std::string, std::string> createButtonCharMap() {
+    static std::unordered_map<std::string, std::string> createButtonCharMap() {
         std::unordered_map<std::string, std::string> map;
         for (const auto& keyInfo : KEYS_INFO) {
             map[keyInfo.name] = keyInfo.glyph;
@@ -435,455 +361,431 @@ namespace ult {
     
     std::atomic<bool> languageWasChanged{false};
 
+    // --- Variable declarations (no inline init = no constructor code per-variable) ---
     #if IS_LAUNCHER_DIRECTIVE
-    std::string ENGLISH = "English";
-    std::string SPANISH = "Spanish";
-    std::string FRENCH = "French";
-    std::string GERMAN = "German";
-    std::string JAPANESE = "Japanese";
-    std::string KOREAN = "Korean";
-    std::string ITALIAN = "Italian";
-    std::string DUTCH = "Dutch";
-    std::string PORTUGUESE = "Portuguese";
-    std::string RUSSIAN = "Russian";
-    std::string UKRAINIAN = "Ukrainian";
-    std::string POLISH = "Polish";
-    std::string SIMPLIFIED_CHINESE = "Simplified Chinese";
-    std::string TRADITIONAL_CHINESE = "Traditional Chinese";
-    std::string OVERLAYS = "Overlays"; //defined in libTesla now
-    std::string OVERLAYS_ABBR = "Overlays";
-    std::string OVERLAY = "Overlay";
-    std::string HIDDEN_OVERLAYS = "Hidden Overlays";
-    std::string PACKAGES = "Packages"; //defined in libTesla now
-    std::string PACKAGE = "Package";
-    std::string HIDDEN_PACKAGES = "Hidden Packages";
-    std::string HIDDEN = "Hidden";
-    std::string HIDE_OVERLAY = "Hide Overlay";
-    std::string HIDE_PACKAGE = "Hide Package";
-    std::string LAUNCH_ARGUMENTS = "Launch Arguments";
-    std::string FORCE_AMS110_SUPPORT = "Force AMS110+ Support";
-    std::string QUICK_LAUNCH = "Quick Launch";
-    std::string BOOT_COMMANDS = "Boot Commands";
-    std::string EXIT_COMMANDS = "Exit Commands";
-    std::string ERROR_LOGGING = "Error Logging";
-    std::string COMMANDS = "Commands";
-    std::string SETTINGS = "Settings";
-    std::string FAVORITE = "Favorite";
-    std::string MAIN_SETTINGS = "Main Settings";
-    std::string UI_SETTINGS = "UI Settings";
+    std::string ENGLISH;
+    std::string SPANISH;
+    std::string FRENCH;
+    std::string GERMAN;
+    std::string JAPANESE;
+    std::string KOREAN;
+    std::string ITALIAN;
+    std::string DUTCH;
+    std::string PORTUGUESE;
+    std::string RUSSIAN;
+    std::string UKRAINIAN;
+    std::string POLISH;
+    std::string SIMPLIFIED_CHINESE;
+    std::string TRADITIONAL_CHINESE;
+    std::string OVERLAYS;
+    std::string OVERLAYS_ABBR;
+    std::string OVERLAY;
+    std::string HIDDEN_OVERLAYS;
+    std::string PACKAGES;
+    std::string PACKAGE;
+    std::string HIDDEN_PACKAGES;
+    std::string HIDDEN;
+    std::string HIDE_OVERLAY;
+    std::string HIDE_PACKAGE;
+    std::string LAUNCH_ARGUMENTS;
+    std::string FORCE_AMS110_SUPPORT;
+    std::string QUICK_LAUNCH;
+    std::string BOOT_COMMANDS;
+    std::string EXIT_COMMANDS;
+    std::string ERROR_LOGGING;
+    std::string COMMANDS;
+    std::string SETTINGS;
+    std::string FAVORITE;
+    std::string MAIN_SETTINGS;
+    std::string UI_SETTINGS;
+    std::string WIDGET;
+    std::string WIDGET_ITEMS;
+    std::string WIDGET_SETTINGS;
+    std::string CLOCK;
+    std::string BATTERY;
+    std::string SOC_TEMPERATURE;
+    std::string PCB_TEMPERATURE;
+    std::string BACKDROP;
+    std::string DYNAMIC_COLORS;
+    std::string CENTER_ALIGNMENT;
+    std::string EXTENDED_BACKDROP;
+    std::string MISCELLANEOUS;
+    std::string MENU_SETTINGS;
+    std::string USER_GUIDE;
+    std::string PACKAGES_MENU;
+    std::string SHOW_HIDDEN;
+    std::string SHOW_DELETE;
+    std::string SHOW_UNSUPPORTED;
+    std::string PAGE_SWAP;
+    std::string RIGHT_SIDE_MODE;
+    std::string OVERLAY_VERSIONS;
+    std::string PACKAGE_VERSIONS;
+    std::string CLEAN_VERSIONS;
+    std::string KEY_COMBO;
+    std::string MODE;
+    std::string LAUNCH_MODES;
+    std::string LANGUAGE;
+    std::string OVERLAY_INFO;
+    std::string SOFTWARE_UPDATE;
+    std::string UPDATE_ULTRAHAND;
+    std::string SYSTEM;
+    std::string DEVICE_INFO;
+    std::string FIRMWARE;
+    std::string BOOTLOADER;
+    std::string HARDWARE;
+    std::string MEMORY;
+    std::string VENDOR;
+    std::string MODEL;
+    std::string STORAGE;
+    std::string OVERLAY_MEMORY;
+    std::string NOT_ENOUGH_MEMORY;
+    std::string WALLPAPER_SUPPORT_DISABLED;
+    std::string SOUND_SUPPORT_DISABLED;
+    std::string WALLPAPER_SUPPORT_ENABLED;
+    std::string SOUND_SUPPORT_ENABLED;
+    std::string EXIT_OVERLAY_SYSTEM;
+    std::string ULTRAHAND_ABOUT;
+    std::string ULTRAHAND_CREDITS_START;
+    std::string ULTRAHAND_CREDITS_END;
+    std::string LOCAL_IP;
+    std::string WALLPAPER;
+    std::string THEME;
+    std::string SOUNDS;
+    std::string DEFAULT;
+    std::string ROOT_PACKAGE;
+    std::string SORT_PRIORITY;
+    std::string OPTIONS;
+    std::string FAILED_TO_OPEN;
+    std::string LAUNCH_COMBOS;
+    std::string NOTIFICATIONS;
+    std::string NOTIFICATION_SETTINGS;
+    std::string SILENCE_NOTIFICATIONS;
+    std::string STARTUP_NOTIFICATION;
+    std::string MAX_SLOTS;
+    std::string API_NOTIFICATIONS;
+    std::string API_TOGGLE_HOTKEY;
+    std::string DISMISS_NOTIFICATION;
+    std::string API_TOGGLE;
+    std::string CLICK;
+    std::string TAP;
+    std::string HOLD_FOR_4S;
 
-    std::string WIDGET = "Widget";
-    std::string WIDGET_ITEMS = "Widget Items";
-    std::string WIDGET_SETTINGS = "Widget Settings";
-    std::string CLOCK = "Clock";
-    std::string BATTERY = "Battery";
-    std::string SOC_TEMPERATURE = "SOC Temperature";
-    std::string PCB_TEMPERATURE = "PCB Temperature";
-    std::string BACKDROP = "Backdrop";
-    std::string DYNAMIC_COLORS = "Dynamic Colors";
-    std::string CENTER_ALIGNMENT = "Center Alignment";
-    std::string EXTENDED_BACKDROP = "Extended Backdrop";
-    std::string MISCELLANEOUS = "Miscellaneous";
-    //std::string MENU_ITEMS = "Menu Items";
-    std::string MENU_SETTINGS = "Menu Settings";
-    std::string USER_GUIDE = "User Guide";
-    std::string SHOW_HIDDEN = "Show Hidden";
-    std::string SHOW_DELETE = "Show Delete";
-    std::string SHOW_UNSUPPORTED = "Show Unsupported";
-    std::string PAGE_SWAP = "Page Swap";
-    std::string RIGHT_SIDE_MODE = "Right-side Mode";
-    std::string OVERLAY_VERSIONS = "Overlay Versions";
-    std::string PACKAGE_VERSIONS = "Package Versions";
-    std::string CLEAN_VERSIONS = "Clean Versions";
-    //std::string VERSION_LABELS = "Version Labels";
-    std::string KEY_COMBO = "Key Combo";
-    std::string MODE = "Mode";
-    std::string LAUNCH_MODES = "Launch Modes";
-    std::string LANGUAGE = "Language";
-    std::string OVERLAY_INFO = "Overlay Info";
-    std::string SOFTWARE_UPDATE = "Software Update";
-    std::string UPDATE_ULTRAHAND = "Update Ultrahand";
-    std::string UPDATE_LANGUAGES = "Update Languages";
-    std::string SYSTEM = "System";
-    std::string DEVICE_INFO = "Device Info";
-    std::string FIRMWARE = "Firmware";
-    std::string BOOTLOADER = "Bootloader";
-    std::string HARDWARE = "Hardware";
-    std::string MEMORY = "Memory";
-    std::string VENDOR = "Vendor";
-    std::string MODEL = "Model";
-    std::string STORAGE = "Storage";
-    //std::string NOTICE = "Notice";
-    //std::string UTILIZES = "Utilizes";
-
-
-    std::string OVERLAY_MEMORY = "Overlay Memory";
-    std::string NOT_ENOUGH_MEMORY = "Not enough memory.";
-    std::string WALLPAPER_SUPPORT_DISABLED = "Wallpaper support disabled.";
-    std::string SOUND_SUPPORT_DISABLED = "Sound support disabled.";
-    std::string WALLPAPER_SUPPORT_ENABLED = "Wallpaper support enabled.";
-    std::string SOUND_SUPPORT_ENABLED = "Sound support enabled.";
-    std::string EXIT_OVERLAY_SYSTEM = "Exit Overlay System";
-
-    //std::string MEMORY_EXPANSION = "Memory Expansion";
-    //std::string REBOOT_REQUIRED = "*Reboot required.";
-    std::string LOCAL_IP = "Local IP";
-    std::string WALLPAPER = "Wallpaper";
-    std::string THEME = "Theme";
-    std::string DEFAULT = "default";
-    std::string ROOT_PACKAGE = "Root Package";
-    std::string SORT_PRIORITY = "Sort Priority";
-    std::string OPTIONS = "Options";
-    std::string FAILED_TO_OPEN = "Failed to open file";
-    std::string LAUNCH_COMBOS = "Launch Combos";
-    std::string STARTUP_NOTIFICATION = "Startup Notification";
-    std::string EXTERNAL_NOTIFICATIONS = "External Notifications";
-    std::string SOUND_EFFECTS = "Sound Effects";
-    std::string HAPTIC_FEEDBACK = "Haptic Feedback";
-    std::string OPAQUE_SCREENSHOTS = "Opaque Screenshots";
-
-    std::string PACKAGE_INFO = "Package Info";
-    std::string _TITLE = "Title";
-    std::string _VERSION= "Version";
-    std::string _CREATOR = "Creator(s)";
-    std::string _ABOUT = "About";
-    std::string _CREDITS = "Credits";
-
-    std::string USERGUIDE_OFFSET = "177";
-    std::string SETTINGS_MENU = "Settings Menu";
-    std::string SCRIPT_OVERLAY = "Script Overlay";
-    std::string STAR_FAVORITE = "Star/Favorite";
-    std::string APP_SETTINGS = "App Settings";
-    std::string ON_MAIN_MENU = "on Main Menu";
-    std::string ON_A_COMMAND = "on a command";
-    std::string ON_OVERLAY_PACKAGE = "on overlay/package";
-    std::string FEATURES = "Features";
-    std::string SWIPE_TO_OPEN = "Swipe to Open";
-
-    std::string THEME_SETTINGS = "Theme Settings";
-    std::string DYNAMIC_LOGO = "Dynamic Logo";
-    std::string SELECTION_BACKGROUND = "Selection Background";
-    std::string SELECTION_TEXT = "Selection Text";
-    std::string SELECTION_VALUE = "Selection Value";
-    std::string LIBULTRAHAND_TITLES = "libultrahand Titles";
-    std::string LIBULTRAHAND_VERSIONS = "libultrahand Versions";
-    std::string PACKAGE_TITLES = "Package Titles";
-
-    std::string ULTRAHAND_HAS_STARTED = "Ultrahand has started.";
-    std::string ULTRAHAND_HAS_RESTARTED = "Ultrahand has restarted.";
-    std::string NEW_UPDATE_IS_AVAILABLE = "New update is available!";
-    //std::string REBOOT_IS_REQUIRED = "Reboot is required.";
-    //std::string HOLD_A_TO_DELETE = "Hold \uE0E0 to Delete";
-    std::string DELETE_PACKAGE = "Delete Package";
-    std::string DELETE_OVERLAY = "Delete Overlay";
-    std::string SELECTION_IS_EMPTY = "Selection is empty!";
-    std::string FORCED_SUPPORT_WARNING = "Forcing support can be dangerous.";
-    
-    std::string TASK_IS_COMPLETE = "Task is complete!";
-    std::string TASK_HAS_FAILED = "Task has failed.";
-
-    //std::string PACKAGE_VERSIONS = "Package Versions";
-
-    //std::string PROGRESS_ANIMATION = "Progress Animation";
-
-    std::string REBOOT_TO = "Reboot To";
-    std::string REBOOT = "Reboot";
-    std::string SHUTDOWN = "Shutdown";
-    std::string BOOT_ENTRY = "Boot Entry";
+    std::string HAPTIC_FEEDBACK;
+    std::string OPAQUE_SCREENSHOTS;
+    std::string PACKAGE_INFO;
+    std::string _TITLE;
+    std::string _VERSION;
+    std::string _CREATOR;
+    std::string _ABOUT;
+    std::string _CREDITS;
+    std::string SETTINGS_MENU;
+    std::string SCRIPT_OVERLAY;
+    std::string STAR_FAVORITE;
+    std::string APP_SETTINGS;
+    std::string ON_MAIN_MENU;
+    std::string ON_A_COMMAND;
+    std::string ON_OVERLAY_PACKAGE;
+    std::string FEATURES;
+    std::string SWIPE_TO_OPEN;
+    std::string THEME_SETTINGS;
+    std::string DYNAMIC_LOGO;
+    std::string SELECTION_BACKGROUND;
+    std::string SELECTION_TEXT;
+    std::string SELECTION_VALUE;
+    std::string LIBULTRAHAND_TITLES;
+    std::string LIBULTRAHAND_VERSIONS;
+    std::string PACKAGE_TITLES;
+    std::string ULTRAHAND_HAS_STARTED;
+    std::string ULTRAHAND_HAS_RESTARTED;
+    std::string NEW_UPDATE_IS_AVAILABLE;
+    std::string DELETE_PACKAGE;
+    std::string DELETE_OVERLAY;
+    std::string SELECTION_IS_EMPTY;
+    std::string FORCED_SUPPORT_WARNING;
+    std::string TASK_IS_COMPLETE;
+    std::string TASK_HAS_FAILED;
+    std::string REBOOT_TO;
+    std::string REBOOT;
+    std::string SHUTDOWN;
+    std::string BOOT_ENTRY;
     #endif
 
-    std::string INCOMPATIBLE_WARNING = "Incompatible on AMS v1.10+";
-    std::string SYSTEM_RAM = "System RAM";
-    std::string FREE = "free";
-
-    std::string DEFAULT_CHAR_WIDTH = "0.33";
-    std::string UNAVAILABLE_SELECTION = "Not available";
-
-
-    std::string ON = "\uE14B";
-    std::string OFF = "\uE14C";
-
-    std::string OK = "OK";
-    std::string BACK = "Back";
-    std::string HIDE = "Hide";
-    std::string CANCEL = "Cancel";
-
-    std::string GAP_1 = "     ";
-    std::string GAP_2 = "  ";
+    std::string INCOMPATIBLE_WARNING;
+    std::string SYSTEM_RAM;
+    std::string FREE;
+    std::string UNAVAILABLE_SELECTION;
+    std::string ON;
+    std::string OFF;
+    std::string OK;
+    std::string BACK;
+    std::string HIDE;
+    std::string CANCEL;
+    std::string GAP_1;
+    std::string GAP_2;
 
     std::atomic<float> halfGap = 0.0f;
-    
 
-    //std::string EMPTY = "Empty";
-    
     #if USING_WIDGET_DIRECTIVE
-    std::string SUNDAY = "Sunday";
-    std::string MONDAY = "Monday";
-    std::string TUESDAY = "Tuesday";
-    std::string WEDNESDAY = "Wednesday";
-    std::string THURSDAY = "Thursday";
-    std::string FRIDAY = "Friday";
-    std::string SATURDAY = "Saturday";
-    
-    std::string JANUARY = "January";
-    std::string FEBRUARY = "February";
-    std::string MARCH = "March";
-    std::string APRIL = "April";
-    std::string MAY = "May";
-    std::string JUNE = "June";
-    std::string JULY = "July";
-    std::string AUGUST = "August";
-    std::string SEPTEMBER = "September";
-    std::string OCTOBER = "October";
-    std::string NOVEMBER = "November";
-    std::string DECEMBER = "December";
-    
-    std::string SUN = "Sun";
-    std::string MON = "Mon";
-    std::string TUE = "Tue";
-    std::string WED = "Wed";
-    std::string THU = "Thu";
-    std::string FRI = "Fri";
-    std::string SAT = "Sat";
-    
-    std::string JAN = "Jan";
-    std::string FEB = "Feb";
-    std::string MAR = "Mar";
-    std::string APR = "Apr";
-    std::string MAY_ABBR = "May";
-    std::string JUN = "Jun";
-    std::string JUL = "Jul";
-    std::string AUG = "Aug";
-    std::string SEP = "Sep";
-    std::string OCT = "Oct";
-    std::string NOV = "Nov";
-    std::string DEC = "Dec";
+    std::string SUNDAY;
+    std::string MONDAY;
+    std::string TUESDAY;
+    std::string WEDNESDAY;
+    std::string THURSDAY;
+    std::string FRIDAY;
+    std::string SATURDAY;
+    std::string JANUARY;
+    std::string FEBRUARY;
+    std::string MARCH;
+    std::string APRIL;
+    std::string MAY;
+    std::string JUNE;
+    std::string JULY;
+    std::string AUGUST;
+    std::string SEPTEMBER;
+    std::string OCTOBER;
+    std::string NOVEMBER;
+    std::string DECEMBER;
+    std::string SUN;
+    std::string MON;
+    std::string TUE;
+    std::string WED;
+    std::string THU;
+    std::string FRI;
+    std::string SAT;
+    std::string JAN;
+    std::string FEB;
+    std::string MAR;
+    std::string APR;
+    std::string MAY_ABBR;
+    std::string JUN;
+    std::string JUL;
+    std::string AUG;
+    std::string SEP;
+    std::string OCT;
+    std::string NOV;
+    std::string DEC;
     #endif
 
-    
-    #if IS_LAUNCHER_DIRECTIVE
-    // Constant string definitions (English)
+
+    // --- Single source-of-truth table ---
+
+    struct LangEntry { std::string* var; const char* key; const char* defaultVal; };
+
+    static constexpr LangEntry LANG_TABLE[] = {
+        #if IS_LAUNCHER_DIRECTIVE
+        {&ENGLISH,                    "ENGLISH",                    "English"},
+        {&SPANISH,                    "SPANISH",                    "Spanish"},
+        {&FRENCH,                     "FRENCH",                     "French"},
+        {&GERMAN,                     "GERMAN",                     "German"},
+        {&JAPANESE,                   "JAPANESE",                   "Japanese"},
+        {&KOREAN,                     "KOREAN",                     "Korean"},
+        {&ITALIAN,                    "ITALIAN",                    "Italian"},
+        {&DUTCH,                      "DUTCH",                      "Dutch"},
+        {&PORTUGUESE,                 "PORTUGUESE",                 "Portuguese"},
+        {&RUSSIAN,                    "RUSSIAN",                    "Russian"},
+        {&UKRAINIAN,                  "UKRAINIAN",                  "Ukrainian"},
+        {&POLISH,                     "POLISH",                     "Polish"},
+        {&SIMPLIFIED_CHINESE,         "SIMPLIFIED_CHINESE",         "Simplified Chinese"},
+        {&TRADITIONAL_CHINESE,        "TRADITIONAL_CHINESE",        "Traditional Chinese"},
+        {&OVERLAYS,                   "OVERLAYS",                   "Overlays"},
+        {&OVERLAYS_ABBR,              "OVERLAYS_ABBR",              "Overlays"},
+        {&OVERLAY,                    "OVERLAY",                    "Overlay"},
+        {&HIDDEN_OVERLAYS,            "HIDDEN_OVERLAYS",            "Hidden Overlays"},
+        {&PACKAGES,                   "PACKAGES",                   "Packages"},
+        {&PACKAGE,                    "PACKAGE",                    "Package"},
+        {&HIDDEN_PACKAGES,            "HIDDEN_PACKAGES",            "Hidden Packages"},
+        {&HIDDEN,                     "HIDDEN",                     "Hidden"},
+        {&HIDE_OVERLAY,               "HIDE_OVERLAY",               "Hide Overlay"},
+        {&HIDE_PACKAGE,               "HIDE_PACKAGE",               "Hide Package"},
+        {&LAUNCH_ARGUMENTS,           "LAUNCH_ARGUMENTS",           "Launch Arguments"},
+        {&FORCE_AMS110_SUPPORT,       "FORCE_AMS110_SUPPORT",       "Force AMS110+ Support"},
+        {&QUICK_LAUNCH,               "QUICK_LAUNCH",               "Quick Launch"},
+        {&BOOT_COMMANDS,              "BOOT_COMMANDS",              "Boot Commands"},
+        {&EXIT_COMMANDS,              "EXIT_COMMANDS",              "Exit Commands"},
+        {&ERROR_LOGGING,              "ERROR_LOGGING",              "Error Logging"},
+        {&COMMANDS,                   "COMMANDS",                   "Commands"},
+        {&SETTINGS,                   "SETTINGS",                   "Settings"},
+        {&FAVORITE,                   "FAVORITE",                   "Favorite"},
+        {&MAIN_SETTINGS,              "MAIN_SETTINGS",              "Main Settings"},
+        {&UI_SETTINGS,                "UI_SETTINGS",                "UI Settings"},
+        {&WIDGET,                     "WIDGET",                     "Widget"},
+        {&WIDGET_ITEMS,               "WIDGET_ITEMS",               "Widget Items"},
+        {&WIDGET_SETTINGS,            "WIDGET_SETTINGS",            "Widget Settings"},
+        {&CLOCK,                      "CLOCK",                      "Clock"},
+        {&BATTERY,                    "BATTERY",                    "Battery"},
+        {&SOC_TEMPERATURE,            "SOC_TEMPERATURE",            "SOC Temperature"},
+        {&PCB_TEMPERATURE,            "PCB_TEMPERATURE",            "PCB Temperature"},
+        {&BACKDROP,                   "BACKDROP",                   "Backdrop"},
+        {&DYNAMIC_COLORS,             "DYNAMIC_COLORS",             "Dynamic Colors"},
+        {&CENTER_ALIGNMENT,           "CENTER_ALIGNMENT",           "Center Alignment"},
+        {&EXTENDED_BACKDROP,          "EXTENDED_BACKDROP",          "Extended Backdrop"},
+        {&MISCELLANEOUS,              "MISCELLANEOUS",              "Miscellaneous"},
+        {&MENU_SETTINGS,              "MENU_SETTINGS",              "Menu Settings"},
+        {&USER_GUIDE,                 "USER_GUIDE",                 "User Guide"},
+        {&PACKAGES_MENU,              "PACKAGES_MENU",              "Packages Menu"},
+        {&SHOW_HIDDEN,                "SHOW_HIDDEN",                "Show Hidden"},
+        {&SHOW_DELETE,                "SHOW_DELETE",                "Show Delete"},
+        {&SHOW_UNSUPPORTED,           "SHOW_UNSUPPORTED",           "Show Unsupported"},
+        {&PAGE_SWAP,                  "PAGE_SWAP",                  "Page Swap"},
+        {&RIGHT_SIDE_MODE,            "RIGHT_SIDE_MODE",            "Right-side Mode"},
+        {&OVERLAY_VERSIONS,           "OVERLAY_VERSIONS",           "Overlay Versions"},
+        {&PACKAGE_VERSIONS,           "PACKAGE_VERSIONS",           "Package Versions"},
+        {&CLEAN_VERSIONS,             "CLEAN_VERSIONS",             "Clean Versions"},
+        {&KEY_COMBO,                  "KEY_COMBO",                  "Key Combo"},
+        {&MODE,                       "MODE",                       "Mode"},
+        {&LAUNCH_MODES,               "LAUNCH_MODES",               "Launch Modes"},
+        {&LANGUAGE,                   "LANGUAGE",                   "Language"},
+        {&OVERLAY_INFO,               "OVERLAY_INFO",               "Overlay Info"},
+        {&SOFTWARE_UPDATE,            "SOFTWARE_UPDATE",            "Software Update"},
+        {&UPDATE_ULTRAHAND,           "UPDATE_ULTRAHAND",           "Update Ultrahand"},
+        {&SYSTEM,                     "SYSTEM",                     "System"},
+        {&DEVICE_INFO,                "DEVICE_INFO",                "Device Info"},
+        {&FIRMWARE,                   "FIRMWARE",                   "Firmware"},
+        {&BOOTLOADER,                 "BOOTLOADER",                 "Bootloader"},
+        {&HARDWARE,                   "HARDWARE",                   "Hardware"},
+        {&MEMORY,                     "MEMORY",                     "Memory"},
+        {&VENDOR,                     "VENDOR",                     "Vendor"},
+        {&MODEL,                      "MODEL",                      "Model"},
+        {&STORAGE,                    "STORAGE",                    "Storage"},
+        {&OVERLAY_MEMORY,             "OVERLAY_MEMORY",             "Overlay Memory"},
+        {&NOT_ENOUGH_MEMORY,          "NOT_ENOUGH_MEMORY",          "Not enough memory."},
+        {&WALLPAPER_SUPPORT_DISABLED, "WALLPAPER_SUPPORT_DISABLED", "Wallpaper support disabled."},
+        {&SOUND_SUPPORT_DISABLED,     "SOUND_SUPPORT_DISABLED",     "Sound support disabled."},
+        {&WALLPAPER_SUPPORT_ENABLED,  "WALLPAPER_SUPPORT_ENABLED",  "Wallpaper support enabled."},
+        {&SOUND_SUPPORT_ENABLED,      "SOUND_SUPPORT_ENABLED",      "Sound support enabled."},
+        {&EXIT_OVERLAY_SYSTEM,        "EXIT_OVERLAY_SYSTEM",        "Exit Overlay System"},
+        {&ULTRAHAND_ABOUT,            "ULTRAHAND_ABOUT",            "Ultrahand Overlay is a customizable overlay ecosystem for overlays, commands, hotkeys, and advanced system interaction."},
+        {&ULTRAHAND_CREDITS_START,    "ULTRAHAND_CREDITS_START",    "Special thanks to "},
+        {&ULTRAHAND_CREDITS_END,      "ULTRAHAND_CREDITS_END",      " and many others. ♥"},
+        {&LOCAL_IP,                   "LOCAL_IP",                   "Local IP"},
+        {&WALLPAPER,                  "WALLPAPER",                  "Wallpaper"},
+        {&THEME,                      "THEME",                      "Theme"},
+        {&SOUNDS,                     "SOUNDS",                     "Sounds"},
+        {&DEFAULT,                    "DEFAULT",                    "default"},
+        {&ROOT_PACKAGE,               "ROOT_PACKAGE",               "Root Package"},
+        {&SORT_PRIORITY,              "SORT_PRIORITY",              "Sort Priority"},
+        {&OPTIONS,                    "OPTIONS",                    "Options"},
+        {&FAILED_TO_OPEN,             "FAILED_TO_OPEN",             "Failed to open file"},
+        {&LAUNCH_COMBOS,              "LAUNCH_COMBOS",              "Launch Combos"},
+        {&NOTIFICATIONS,              "NOTIFICATIONS",              "Notifications"},
+        {&NOTIFICATION_SETTINGS,      "NOTIFICATION_SETTINGS",      "Notification Settings"},
+        {&SILENCE_NOTIFICATIONS,      "SILENCE_NOTIFICATIONS",      "Silence Notifications"},
+        {&STARTUP_NOTIFICATION,       "STARTUP_NOTIFICATION",       "Startup Notification"},
+        {&MAX_SLOTS,                  "MAX_SLOTS",                  "Max Slots"},
+        {&API_NOTIFICATIONS,          "API_NOTIFICATIONS",          "API Notifications"},
+        {&API_TOGGLE_HOTKEY,          "API_TOGGLE_HOTKEY",          "API Toggle Hotkey"},
+        {&DISMISS_NOTIFICATION,       "DISMISS_NOTIFICATION",       "Dismiss Notification"},
+        {&API_TOGGLE,                 "API_TOGGLE",                 "API Toggle"},
+        {&CLICK,                      "CLICK",                      "click"},
+        {&TAP,                        "TAP",                        "tap"},
+        {&HOLD_FOR_4S,                "HOLD_FOR_4S",                "hold for 4s"},
+        {&HAPTIC_FEEDBACK,            "HAPTIC_FEEDBACK",            "Haptic Feedback"},
+        {&OPAQUE_SCREENSHOTS,         "OPAQUE_SCREENSHOTS",         "Opaque Screenshots"},
+        {&PACKAGE_INFO,               "PACKAGE_INFO",               "Package Info"},
+        {&_TITLE,                     "_TITLE",                     "Title"},
+        {&_VERSION,                   "_VERSION",                   "Version"},
+        {&_CREATOR,                   "_CREATOR",                   "Creator(s)"},
+        {&_ABOUT,                     "_ABOUT",                     "About"},
+        {&_CREDITS,                   "_CREDITS",                   "Credits"},
+        {&SETTINGS_MENU,              "SETTINGS_MENU",              "Settings Menu"},
+        {&SCRIPT_OVERLAY,             "SCRIPT_OVERLAY",             "Script Overlay"},
+        {&STAR_FAVORITE,              "STAR_FAVORITE",              "Star/Favorite"},
+        {&APP_SETTINGS,               "APP_SETTINGS",               "App Settings"},
+        {&ON_MAIN_MENU,               "ON_MAIN_MENU",               "on Main Menu"},
+        {&ON_A_COMMAND,               "ON_A_COMMAND",               "on a command"},
+        {&ON_OVERLAY_PACKAGE,         "ON_OVERLAY_PACKAGE",         "on overlay/package"},
+        {&FEATURES,                   "FEATURES",                   "Features"},
+        {&SWIPE_TO_OPEN,              "SWIPE_TO_OPEN",              "Swipe to Open"},
+        {&THEME_SETTINGS,             "THEME_SETTINGS",             "Theme Settings"},
+        {&DYNAMIC_LOGO,               "DYNAMIC_LOGO",               "Dynamic Logo"},
+        {&SELECTION_BACKGROUND,       "SELECTION_BACKGROUND",       "Selection Background"},
+        {&SELECTION_TEXT,             "SELECTION_TEXT",             "Selection Text"},
+        {&SELECTION_VALUE,            "SELECTION_VALUE",            "Selection Value"},
+        {&LIBULTRAHAND_TITLES,        "LIBULTRAHAND_TITLES",        "libultrahand Titles"},
+        {&LIBULTRAHAND_VERSIONS,      "LIBULTRAHAND_VERSIONS",      "libultrahand Versions"},
+        {&PACKAGE_TITLES,             "PACKAGE_TITLES",             "Package Titles"},
+        {&ULTRAHAND_HAS_STARTED,      "ULTRAHAND_HAS_STARTED",      "Ultrahand has started."},
+        {&ULTRAHAND_HAS_RESTARTED,    "ULTRAHAND_HAS_RESTARTED",    "Ultrahand has restarted."},
+        {&NEW_UPDATE_IS_AVAILABLE,    "NEW_UPDATE_IS_AVAILABLE",    "New update is available!"},
+        {&DELETE_PACKAGE,             "DELETE_PACKAGE",             "Delete Package"},
+        {&DELETE_OVERLAY,             "DELETE_OVERLAY",             "Delete Overlay"},
+        {&SELECTION_IS_EMPTY,         "SELECTION_IS_EMPTY",         "Selection is empty!"},
+        {&FORCED_SUPPORT_WARNING,     "FORCED_SUPPORT_WARNING",     "Forcing support can be dangerous."},
+        {&TASK_IS_COMPLETE,           "TASK_IS_COMPLETE",           "Task is complete!"},
+        {&TASK_HAS_FAILED,            "TASK_HAS_FAILED",            "Task has failed."},
+        {&REBOOT_TO,                  "REBOOT_TO",                  "Reboot To"},
+        {&REBOOT,                     "REBOOT",                     "Reboot"},
+        {&SHUTDOWN,                   "SHUTDOWN",                   "Shutdown"},
+        {&BOOT_ENTRY,                 "BOOT_ENTRY",                 "Boot Entry"},
+        #endif
+
+        {&INCOMPATIBLE_WARNING,       "INCOMPATIBLE_WARNING",       "Incompatible on AMS v1.10+"},
+        {&SYSTEM_RAM,                 "SYSTEM_RAM",                 "System RAM"},
+        {&FREE,                       "FREE",                       "free"},
+        {&UNAVAILABLE_SELECTION,      "UNAVAILABLE_SELECTION",      "Not available"},
+        {&ON,                         "ON",                         "\uE14B"},
+        {&OFF,                        "OFF",                        "\uE14C"},
+        {&OK,                         "OK",                         "OK"},
+        {&BACK,                       "BACK",                       "Back"},
+        {&HIDE,                       "HIDE",                       "Hide"},
+        {&CANCEL,                     "CANCEL",                     "Cancel"},
+        {&GAP_1,                      "GAP_1",                      "     "},
+        {&GAP_2,                      "GAP_2",                      "  "},
+
+        #if USING_WIDGET_DIRECTIVE
+        {&SUNDAY,                     "SUNDAY",                     "Sunday"},
+        {&MONDAY,                     "MONDAY",                     "Monday"},
+        {&TUESDAY,                    "TUESDAY",                    "Tuesday"},
+        {&WEDNESDAY,                  "WEDNESDAY",                  "Wednesday"},
+        {&THURSDAY,                   "THURSDAY",                   "Thursday"},
+        {&FRIDAY,                     "FRIDAY",                     "Friday"},
+        {&SATURDAY,                   "SATURDAY",                   "Saturday"},
+        {&JANUARY,                    "JANUARY",                    "January"},
+        {&FEBRUARY,                   "FEBRUARY",                   "February"},
+        {&MARCH,                      "MARCH",                      "March"},
+        {&APRIL,                      "APRIL",                      "April"},
+        {&MAY,                        "MAY",                        "May"},
+        {&JUNE,                       "JUNE",                       "June"},
+        {&JULY,                       "JULY",                       "July"},
+        {&AUGUST,                     "AUGUST",                     "August"},
+        {&SEPTEMBER,                  "SEPTEMBER",                  "September"},
+        {&OCTOBER,                    "OCTOBER",                    "October"},
+        {&NOVEMBER,                   "NOVEMBER",                   "November"},
+        {&DECEMBER,                   "DECEMBER",                   "December"},
+        {&SUN,                        "SUN",                        "Sun"},
+        {&MON,                        "MON",                        "Mon"},
+        {&TUE,                        "TUE",                        "Tue"},
+        {&WED,                        "WED",                        "Wed"},
+        {&THU,                        "THU",                        "Thu"},
+        {&FRI,                        "FRI",                        "Fri"},
+        {&SAT,                        "SAT",                        "Sat"},
+        {&JAN,                        "JAN",                        "Jan"},
+        {&FEB,                        "FEB",                        "Feb"},
+        {&MAR,                        "MAR",                        "Mar"},
+        {&APR,                        "APR",                        "Apr"},
+        {&MAY_ABBR,                   "MAY_ABBR",                   "May"},
+        {&JUN,                        "JUN",                        "Jun"},
+        {&JUL,                        "JUL",                        "Jul"},
+        {&AUG,                        "AUG",                        "Aug"},
+        {&SEP,                        "SEP",                        "Sep"},
+        {&OCT,                        "OCT",                        "Oct"},
+        {&NOV,                        "NOV",                        "Nov"},
+        {&DEC,                        "DEC",                        "Dec"},
+        #endif
+    };
+
+    static constexpr size_t LANG_TABLE_SIZE = sizeof(LANG_TABLE) / sizeof(LANG_TABLE[0]);
+
+
+    // --- reinitializeLangVars: just a loop now ---
     void reinitializeLangVars() {
-        ENGLISH = "English";
-        SPANISH = "Spanish";
-        FRENCH = "French";
-        GERMAN = "German";
-        JAPANESE = "Japanese";
-        KOREAN = "Korean";
-        ITALIAN = "Italian";
-        DUTCH = "Dutch";
-        PORTUGUESE = "Portuguese";
-        RUSSIAN = "Russian";
-        UKRAINIAN = "Ukrainian";
-        POLISH = "Polish";
-        SIMPLIFIED_CHINESE = "Simplified Chinese";
-        TRADITIONAL_CHINESE = "Traditional Chinese";
-        DEFAULT_CHAR_WIDTH = "0.33";
-        UNAVAILABLE_SELECTION = "Not available";
-        OVERLAYS = "Overlays"; //defined in libTesla now
-        OVERLAYS_ABBR = "Overlays";
-        OVERLAY = "Overlay";
-        HIDDEN_OVERLAYS = "Hidden Overlays";
-        PACKAGES = "Packages"; //defined in libTesla now
-        PACKAGE = "Package";
-        HIDDEN_PACKAGES = "Hidden Packages";
-        HIDDEN = "Hidden";
-        HIDE_OVERLAY = "Hide Overlay";
-        HIDE_PACKAGE = "Hide Package";
-        LAUNCH_ARGUMENTS = "Launch Arguments";
-        FORCE_AMS110_SUPPORT = "Force AMS110+ Support";
-        QUICK_LAUNCH = "Quick Launch";
-        BOOT_COMMANDS = "Boot Commands";
-        EXIT_COMMANDS = "Exit Commands";
-        ERROR_LOGGING = "Error Logging";
-        COMMANDS = "Commands";
-        SETTINGS = "Settings";
-        FAVORITE = "Favorite";
-        MAIN_SETTINGS = "Main Settings";
-        UI_SETTINGS = "UI Settings";
-        WIDGET = "Widget";
-        WIDGET_ITEMS = "Widget Items";
-        WIDGET_SETTINGS = "Widget Settings";
-        CLOCK = "Clock";
-        BATTERY = "Battery";
-        SOC_TEMPERATURE = "SOC Temperature";
-        PCB_TEMPERATURE = "PCB Temperature";
-        BACKDROP = "Backdrop";
-        DYNAMIC_COLORS = "Dynamic Colors";
-        CENTER_ALIGNMENT = "Center Alignment";
-        EXTENDED_BACKDROP = "Extended Backdrop";
-        MISCELLANEOUS = "Miscellaneous";
-        //MENU_ITEMS = "Menu Items";
-        MENU_SETTINGS = "Menu Settings";
-        USER_GUIDE = "User Guide";
-        SHOW_HIDDEN = "Show Hidden";
-        SHOW_DELETE = "Show Delete";
-        SHOW_UNSUPPORTED = "Show Unsupported";
-        PAGE_SWAP = "Page Swap";
-        RIGHT_SIDE_MODE = "Right-side Mode";
-        OVERLAY_VERSIONS = "Overlay Versions";
-        PACKAGE_VERSIONS = "Package Versions";
-        CLEAN_VERSIONS = "Clean Versions";
-        //VERSION_LABELS = "Version Labels";
-        KEY_COMBO = "Key Combo";
-        MODE = "Mode";
-        LAUNCH_MODES = "Launch Modes";
-        LANGUAGE = "Language";
-        OVERLAY_INFO = "Overlay Info";
-        SOFTWARE_UPDATE = "Software Update";
-        UPDATE_ULTRAHAND = "Update Ultrahand";
-        UPDATE_LANGUAGES = "Update Languages";
-        SYSTEM = "System";
-        DEVICE_INFO = "Device Info";
-        FIRMWARE = "Firmware";
-        BOOTLOADER = "Bootloader";
-        HARDWARE = "Hardware";
-        MEMORY = "Memory";
-        VENDOR = "Vendor";
-        MODEL = "Model";
-        STORAGE = "Storage";
-        //NOTICE = "Notice";
-        //UTILIZES = "Utilizes";
-        SYSTEM_RAM = "System RAM";
-        FREE = "free";
-        
-        OVERLAY_MEMORY = "Overlay Memory";
-        NOT_ENOUGH_MEMORY = "Not enough memory.";
-        WALLPAPER_SUPPORT_DISABLED = "Wallpaper support disabled.";
-        SOUND_SUPPORT_DISABLED = "Sound support disabled.";
-        WALLPAPER_SUPPORT_ENABLED = "Wallpaper support enabled.";
-        SOUND_SUPPORT_ENABLED = "Sound support enabled.";
-        EXIT_OVERLAY_SYSTEM = "Exit Overlay System";
-
-        //MEMORY_EXPANSION = "Memory Expansion";
-        //REBOOT_REQUIRED = "*Reboot required.";
-        LOCAL_IP = "Local IP";
-        WALLPAPER = "Wallpaper";
-        THEME = "Theme";
-        DEFAULT = "default";
-        ROOT_PACKAGE = "Root Package";
-        SORT_PRIORITY = "Sort Priority";
-        OPTIONS = "Options";
-        FAILED_TO_OPEN = "Failed to open file";
-
-        LAUNCH_COMBOS = "Launch Combos";
-        STARTUP_NOTIFICATION = "Startup Notification";
-        EXTERNAL_NOTIFICATIONS = "External Notifications";
-        SOUND_EFFECTS = "Sound Effects";
-        HAPTIC_FEEDBACK = "Haptic Feedback";
-        OPAQUE_SCREENSHOTS = "Opaque Screenshots";
-        ON = "\uE14B";
-        OFF = "\uE14C";
-        PACKAGE_INFO = "Package Info";
-        _TITLE = "Title";
-        _VERSION= "Version";
-        _CREATOR = "Creator(s)";
-        _ABOUT = "About";
-        _CREDITS = "Credits";
-        OK = "OK";
-        BACK = "Back";
-        HIDE = "Hide";
-        CANCEL = "Cancel";
-
-        REBOOT_TO = "Reboot To";
-        REBOOT = "Reboot";
-        SHUTDOWN = "Shutdown";
-        BOOT_ENTRY = "Boot Entry";
-        GAP_1 = "     ";
-        GAP_2 = "  ";
-
-        USERGUIDE_OFFSET = "177";
-        SETTINGS_MENU = "Settings Menu";
-        SCRIPT_OVERLAY = "Script Overlay";
-        STAR_FAVORITE = "Star/Favorite";
-        APP_SETTINGS = "App Settings";
-        ON_MAIN_MENU = "on Main Menu";
-        ON_A_COMMAND = "on a command";
-        ON_OVERLAY_PACKAGE = "on overlay/package";
-        FEATURES = "Features";
-        SWIPE_TO_OPEN = "Swipe to Open";
-        //PROGRESS_ANIMATION = "Progress Animation";
-
-        THEME_SETTINGS = "Theme Settings";
-        DYNAMIC_LOGO = "Dynamic Logo";
-        SELECTION_BACKGROUND = "Selection Background";
-        SELECTION_TEXT = "Selection Text";
-        SELECTION_VALUE = "Selection Value";
-        LIBULTRAHAND_TITLES = "libultrahand Titles";
-        LIBULTRAHAND_VERSIONS = "libultrahand Versions";
-        PACKAGE_TITLES = "Package Titles";
-        //PACKAGE_VERSIONS = "Package Versions";
-
-        ULTRAHAND_HAS_STARTED = "Ultrahand has started.";
-        ULTRAHAND_HAS_RESTARTED = "Ultrahand has reloaded.";
-        NEW_UPDATE_IS_AVAILABLE = "New update is available!";
-        //REBOOT_IS_REQUIRED = "Reboot is required.";
-        //HOLD_A_TO_DELETE = "Hold  to Delete";
-        DELETE_PACKAGE = "Delete Package";
-        DELETE_OVERLAY = "Delete Overlay";
-        SELECTION_IS_EMPTY = "Selection is empty!";
-        FORCED_SUPPORT_WARNING = "Forcing support can be dangerous.";
-        INCOMPATIBLE_WARNING = "Incompatible on AMS v1.10+";
-        TASK_IS_COMPLETE = "Task is complete!";
-        TASK_HAS_FAILED = "Task has failed.";
-
-        //EMPTY = "Empty";
-    
-        SUNDAY = "Sunday";
-        MONDAY = "Monday";
-        TUESDAY = "Tuesday";
-        WEDNESDAY = "Wednesday";
-        THURSDAY = "Thursday";
-        FRIDAY = "Friday";
-        SATURDAY = "Saturday";
-        
-        JANUARY = "January";
-        FEBRUARY = "February";
-        MARCH = "March";
-        APRIL = "April";
-        MAY = "May";
-        JUNE = "June";
-        JULY = "July";
-        AUGUST = "August";
-        SEPTEMBER = "September";
-        OCTOBER = "October";
-        NOVEMBER = "November";
-        DECEMBER = "December";
-        
-        SUN = "Sun";
-        MON = "Mon";
-        TUE = "Tue";
-        WED = "Wed";
-        THU = "Thu";
-        FRI = "Fri";
-        SAT = "Sat";
-        
-        JAN = "Jan";
-        FEB = "Feb";
-        MAR = "Mar";
-        APR = "Apr";
-        MAY_ABBR = "May";
-        JUN = "Jun";
-        JUL = "Jul";
-        AUG = "Aug";
-        SEP = "Sep";
-        OCT = "Oct";
-        NOV = "Nov";
-        DEC = "Dec";
-    }
-    #endif
-    
-    
-    
-    // Function to update a constant if the new value from JSON is not empty
-    void updateIfNotEmpty(std::string& constant, const std::string& newValue) {
-        if (!newValue.empty()) {
-            constant = newValue;
-        }
+        for (size_t i = 0; i < LANG_TABLE_SIZE; ++i)
+            *LANG_TABLE[i].var = LANG_TABLE[i].defaultVal;
     }
 
+
+    // --- parseLanguage: same loop, different source ---
     void parseLanguage(const std::string& langFile) {
-        // Map to store parsed JSON data
         std::unordered_map<std::string, std::string> jsonMap;
         if (!parseJsonToMap(langFile, jsonMap)) {
             #if USING_LOGGING_DIRECTIVE
@@ -891,468 +793,65 @@ namespace ult {
             #endif
             return;
         }
-
-        
-        std::unordered_map<std::string, std::string*> configMap = {
-            #if IS_LAUNCHER_DIRECTIVE
-            {"ENGLISH", &ENGLISH},
-            {"SPANISH", &SPANISH},
-            {"FRENCH", &FRENCH},
-            {"GERMAN", &GERMAN},
-            {"JAPANESE", &JAPANESE},
-            {"KOREAN", &KOREAN},
-            {"ITALIAN", &ITALIAN},
-            {"DUTCH", &DUTCH},
-            {"PORTUGUESE", &PORTUGUESE},
-            {"RUSSIAN", &RUSSIAN},
-            {"UKRAINIAN", &UKRAINIAN},
-            {"POLISH", &POLISH},
-            {"SIMPLIFIED_CHINESE", &SIMPLIFIED_CHINESE},
-            {"TRADITIONAL_CHINESE", &TRADITIONAL_CHINESE},
-            {"OVERLAYS", &OVERLAYS},
-            {"OVERLAYS_ABBR", &OVERLAYS_ABBR},
-            {"OVERLAY", &OVERLAY},
-            {"HIDDEN_OVERLAYS", &HIDDEN_OVERLAYS},
-            {"PACKAGES", &PACKAGES},
-            {"PACKAGE", &PACKAGE},
-            {"HIDDEN_PACKAGES", &HIDDEN_PACKAGES},
-            {"HIDDEN", &HIDDEN},
-            {"HIDE_PACKAGE", &HIDE_PACKAGE},
-            {"HIDE_OVERLAY", &HIDE_OVERLAY},
-            {"LAUNCH_ARGUMENTS", &LAUNCH_ARGUMENTS},
-            {"FORCE_AMS110_SUPPORT", &FORCE_AMS110_SUPPORT},
-            {"QUICK_LAUNCH", &QUICK_LAUNCH},
-            {"BOOT_COMMANDS", &BOOT_COMMANDS},
-            {"EXIT_COMMANDS", &EXIT_COMMANDS},
-            {"ERROR_LOGGING", &ERROR_LOGGING},
-            {"COMMANDS", &COMMANDS},
-            {"SETTINGS", &SETTINGS},
-            {"FAVORITE", &FAVORITE},
-            {"MAIN_SETTINGS", &MAIN_SETTINGS},
-            {"UI_SETTINGS", &UI_SETTINGS},
-
-            {"WIDGET", &WIDGET},
-            {"WIDGET_ITEMS", &WIDGET_ITEMS},
-            {"WIDGET_SETTINGS", &WIDGET_SETTINGS},
-            {"CLOCK", &CLOCK},
-            {"BATTERY", &BATTERY},
-            {"SOC_TEMPERATURE", &SOC_TEMPERATURE},
-            {"PCB_TEMPERATURE", &PCB_TEMPERATURE},
-            {"BACKDROP", &BACKDROP},
-            {"DYNAMIC_COLORS", &DYNAMIC_COLORS},
-            {"CENTER_ALIGNMENT", &CENTER_ALIGNMENT},
-            {"EXTENDED_BACKDROP", &EXTENDED_BACKDROP},
-            {"MISCELLANEOUS", &MISCELLANEOUS},
-            //{"MENU_ITEMS", &MENU_ITEMS},
-            {"MENU_SETTINGS", &MENU_SETTINGS},
-            {"USER_GUIDE", &USER_GUIDE},
-            {"SHOW_HIDDEN", &SHOW_HIDDEN},
-            {"SHOW_DELETE", &SHOW_DELETE},
-            {"SHOW_UNSUPPORTED", &SHOW_UNSUPPORTED},
-            {"PAGE_SWAP", &PAGE_SWAP},
-            {"RIGHT_SIDE_MODE", &RIGHT_SIDE_MODE},
-            {"OVERLAY_VERSIONS", &OVERLAY_VERSIONS},
-            {"PACKAGE_VERSIONS", &PACKAGE_VERSIONS},
-            {"CLEAN_VERSIONS", &CLEAN_VERSIONS},
-            //{"VERSION_LABELS", &VERSION_LABELS},
-            {"KEY_COMBO", &KEY_COMBO},
-            {"MODE", &MODE},
-            {"LAUNCH_MODES", &LAUNCH_MODES},
-            {"LANGUAGE", &LANGUAGE},
-            {"OVERLAY_INFO", &OVERLAY_INFO},
-            {"SOFTWARE_UPDATE", &SOFTWARE_UPDATE},
-            {"UPDATE_ULTRAHAND", &UPDATE_ULTRAHAND},
-            {"UPDATE_LANGUAGES", &UPDATE_LANGUAGES},
-            {"SYSTEM", &SYSTEM},
-            {"DEVICE_INFO", &DEVICE_INFO},
-            {"FIRMWARE", &FIRMWARE},
-            {"BOOTLOADER", &BOOTLOADER},
-            {"HARDWARE", &HARDWARE},
-            {"MEMORY", &MEMORY},
-            {"VENDOR", &VENDOR},
-            {"MODEL", &MODEL},
-            {"STORAGE", &STORAGE},
-            //{"NOTICE", &NOTICE},
-            //{"UTILIZES", &UTILIZES},
-
-            {"OVERLAY_MEMORY", &OVERLAY_MEMORY},
-            {"NOT_ENOUGH_MEMORY", &NOT_ENOUGH_MEMORY},
-            {"WALLPAPER_SUPPORT_DISABLED", &WALLPAPER_SUPPORT_DISABLED},
-            {"SOUND_SUPPORT_DISABLED", &SOUND_SUPPORT_DISABLED},
-            {"WALLPAPER_SUPPORT_ENABLED", &WALLPAPER_SUPPORT_ENABLED},
-            {"SOUND_SUPPORT_ENABLED", &SOUND_SUPPORT_ENABLED},
-            {"EXIT_OVERLAY_SYSTEM", &EXIT_OVERLAY_SYSTEM},
-
-            //{"MEMORY_EXPANSION", &MEMORY_EXPANSION},
-            //{"REBOOT_REQUIRED", &REBOOT_REQUIRED},
-            {"LOCAL_IP", &LOCAL_IP},
-            {"WALLPAPER", &WALLPAPER},
-            {"THEME", &THEME},
-            {"DEFAULT", &DEFAULT},
-            {"ROOT_PACKAGE", &ROOT_PACKAGE},
-            {"SORT_PRIORITY", &SORT_PRIORITY},
-            {"OPTIONS", &OPTIONS},
-            {"FAILED_TO_OPEN", &FAILED_TO_OPEN},
-
-            {"LAUNCH_COMBOS", &LAUNCH_COMBOS},
-            {"STARTUP_NOTIFICATION", &STARTUP_NOTIFICATION},
-            {"EXTERNAL_NOTIFICATIONS", &EXTERNAL_NOTIFICATIONS},
-            {"SOUND_EFFECTS", &SOUND_EFFECTS},
-            {"HAPTIC_FEEDBACK", &HAPTIC_FEEDBACK},
-            {"OPAQUE_SCREENSHOTS", &OPAQUE_SCREENSHOTS},
-
-            {"PACKAGE_INFO", &PACKAGE_INFO},
-            {"TITLE", &_TITLE},
-            {"VERSION", &_VERSION},
-            {"CREATOR", &_CREATOR},
-            {"ABOUT", &_ABOUT},
-            {"CREDITS", &_CREDITS},
-
-            {"USERGUIDE_OFFSET", &USERGUIDE_OFFSET},
-            {"SETTINGS_MENU", &SETTINGS_MENU},
-            {"SCRIPT_OVERLAY", &SCRIPT_OVERLAY},
-            {"STAR_FAVORITE", &STAR_FAVORITE},
-            {"APP_SETTINGS", &APP_SETTINGS},
-            {"ON_MAIN_MENU", &ON_MAIN_MENU},
-            {"ON_A_COMMAND", &ON_A_COMMAND},
-            {"ON_OVERLAY_PACKAGE", &ON_OVERLAY_PACKAGE},
-            {"FEATURES", &FEATURES},
-            {"SWIPE_TO_OPEN", &SWIPE_TO_OPEN},
-
-            {"THEME_SETTINGS", &THEME_SETTINGS},
-            {"DYNAMIC_LOGO", &DYNAMIC_LOGO},
-            {"SELECTION_BACKGROUND", &SELECTION_BACKGROUND},
-            {"SELECTION_TEXT", &SELECTION_TEXT},
-            {"SELECTION_VALUE", &SELECTION_VALUE},
-            {"LIBULTRAHAND_TITLES", &LIBULTRAHAND_TITLES},
-            {"LIBULTRAHAND_VERSIONS", &LIBULTRAHAND_VERSIONS},
-            {"PACKAGE_TITLES", &PACKAGE_TITLES},
-
-            {"ULTRAHAND_HAS_STARTED", &ULTRAHAND_HAS_STARTED},
-            {"ULTRAHAND_HAS_RESTARTED", &ULTRAHAND_HAS_RESTARTED},
-            {"NEW_UPDATE_IS_AVAILABLE", &NEW_UPDATE_IS_AVAILABLE},
-            //{"REBOOT_IS_REQUIRED", &REBOOT_IS_REQUIRED},
-            //{"HOLD_A_TO_DELETE", &HOLD_A_TO_DELETE},
-            {"DELETE_PACKAGE", &DELETE_PACKAGE},
-            {"DELETE_OVERLAY", &DELETE_OVERLAY},
-            {"SELECTION_IS_EMPTY", &SELECTION_IS_EMPTY},
-            {"FORCED_SUPPORT_WARNING", &FORCED_SUPPORT_WARNING},
-            {"INCOMPATIBLE_WARNING", &INCOMPATIBLE_WARNING},
-            {"TASK_IS_COMPLETE", &TASK_IS_COMPLETE},
-            {"TASK_HAS_FAILED", &TASK_HAS_FAILED},
-
-            //{"PACKAGE_VERSIONS", &PACKAGE_VERSIONS},
-            //{"PROGRESS_ANIMATION", &PROGRESS_ANIMATION},
-
-            {"REBOOT_TO", &REBOOT_TO},
-            {"REBOOT", &REBOOT},
-            {"SHUTDOWN", &SHUTDOWN},
-            {"BOOT_ENTRY", &BOOT_ENTRY},
-            #endif
-
-            {"SYSTEM_RAM", &SYSTEM_RAM},
-            {"FREE", &FREE},
-            
-            {"DEFAULT_CHAR_WIDTH", &DEFAULT_CHAR_WIDTH},
-            {"UNAVAILABLE_SELECTION", &UNAVAILABLE_SELECTION},
-
-            {"ON", &ON},
-            {"OFF", &OFF},
-
-            {"OK", &OK},
-            {"BACK", &BACK},
-            {"HIDE", &HIDE},
-            {"CANCEL", &CANCEL},
-
-            {"GAP_1", &GAP_1},
-            {"GAP_2", &GAP_2},
-
-            //{"EMPTY", &EMPTY},
-
-            #if USING_WIDGET_DIRECTIVE
-            {"SUNDAY", &SUNDAY},
-            {"MONDAY", &MONDAY},
-            {"TUESDAY", &TUESDAY},
-            {"WEDNESDAY", &WEDNESDAY},
-            {"THURSDAY", &THURSDAY},
-            {"FRIDAY", &FRIDAY},
-            {"SATURDAY", &SATURDAY},
-            {"JANUARY", &JANUARY},
-            {"FEBRUARY", &FEBRUARY},
-            {"MARCH", &MARCH},
-            {"APRIL", &APRIL},
-            {"MAY", &MAY},
-            {"JUNE", &JUNE},
-            {"JULY", &JULY},
-            {"AUGUST", &AUGUST},
-            {"SEPTEMBER", &SEPTEMBER},
-            {"OCTOBER", &OCTOBER},
-            {"NOVEMBER", &NOVEMBER},
-            {"DECEMBER", &DECEMBER},
-            {"SUN", &SUN},
-            {"MON", &MON},
-            {"TUE", &TUE},
-            {"WED", &WED},
-            {"THU", &THU},
-            {"FRI", &FRI},
-            {"SAT", &SAT},
-            {"JAN", &JAN},
-            {"FEB", &FEB},
-            {"MAR", &MAR},
-            {"APR", &APR},
-            {"MAY_ABBR", &MAY_ABBR},
-            {"JUN", &JUN},
-            {"JUL", &JUL},
-            {"AUG", &AUG},
-            {"SEP", &SEP},
-            {"OCT", &OCT},
-            {"NOV", &NOV},
-            {"DEC", &DEC}
-            #endif
-        };
-        
-        // Iterate over the map to update global variables
-        for (auto& kv : configMap) {
+        for (size_t i = 0; i < LANG_TABLE_SIZE; ++i) {
             // 跳过对ON和OFF的语言更新
-            if (kv.first == "ON" || kv.first == "OFF") {
+            if (cv.first == "ON" || cv.first == "OFF") {
                 continue;
             }
-            auto it = jsonMap.find(kv.first);
-            if (it != jsonMap.end()) {
-                updateIfNotEmpty(*kv.second, it->second);
-            }
+            auto it = jsonMap.find(LANG_TABLE[i].key);
+            *LANG_TABLE[i].var = (it != jsonMap.end()) ? it->second : LANG_TABLE[i].defaultVal;
         }
     }
-    
-    
-    // Helper function to apply replacements
-    //void applyTimeStrReplacements(std::string& str, const std::unordered_map<std::string, std::string>& mappings) {
-    //    size_t pos;
-    //    for (const auto& mapping : mappings) {
-    //        pos = str.find(mapping.first);
-    //        while (pos != std::string::npos) {
-    //            str.replace(pos, mapping.first.length(), mapping.second);
-    //            pos = str.find(mapping.first, pos + mapping.second.length());
-    //        }
-    //    }
-    //}
-    
+
+
+    // --- localizeTimeStr and applyLangReplacements unchanged ---
     #if USING_WIDGET_DIRECTIVE
     void localizeTimeStr(char* timeStr) {
-        // Define static unordered_map for day and month mappings
-        static std::unordered_map<std::string, std::string*> mappings = {
-            {"Sun", &SUN},
-            {"Mon", &MON},
-            {"Tue", &TUE},
-            {"Wed", &WED},
-            {"Thu", &THU},
-            {"Fri", &FRI},
-            {"Sat", &SAT},
-            {"Sunday", &SUNDAY},
-            {"Monday", &MONDAY},
-            {"Tuesday", &TUESDAY},
-            {"Wednesday", &WEDNESDAY},
-            {"Thursday", &THURSDAY},
-            {"Friday", &FRIDAY},
-            {"Saturday", &SATURDAY},
-            {"Jan", &JAN},
-            {"Feb", &FEB},
-            {"Mar", &MAR},
-            {"Apr", &APR},
-            {"May", &MAY_ABBR},
-            {"Jun", &JUN},
-            {"Jul", &JUL},
-            {"Aug", &AUG},
-            {"Sep", &SEP},
-            {"Oct", &OCT},
-            {"Nov", &NOV},
-            {"Dec", &DEC},
-            {"January", &JANUARY},
-            {"February", &FEBRUARY},
-            {"March", &MARCH},
-            {"April", &APRIL},
-            {"May", &MAY},
-            {"June", &JUNE},
-            {"July", &JULY},
-            {"August", &AUGUST},
-            {"September", &SEPTEMBER},
-            {"October", &OCTOBER},
-            {"November", &NOVEMBER},
-            {"December", &DECEMBER}
+        static const struct { const char* key; std::string* val; } mappings[] = {
+            {"Sunday",    &SUNDAY},    {"Monday",    &MONDAY},    {"Tuesday",   &TUESDAY},
+            {"Wednesday", &WEDNESDAY}, {"Thursday",  &THURSDAY},  {"Friday",    &FRIDAY},
+            {"Saturday",  &SATURDAY},
+            {"January",   &JANUARY},   {"February",  &FEBRUARY},  {"March",     &MARCH},
+            {"April",     &APRIL},     {"June",      &JUNE},      {"July",      &JULY},
+            {"August",    &AUGUST},    {"September", &SEPTEMBER}, {"October",   &OCTOBER},
+            {"November",  &NOVEMBER},  {"December",  &DECEMBER},
+            {"Sun", &SUN}, {"Mon", &MON}, {"Tue", &TUE}, {"Wed", &WED},
+            {"Thu", &THU}, {"Fri", &FRI}, {"Sat", &SAT},
+            {"Jan", &JAN}, {"Feb", &FEB}, {"Mar", &MAR}, {"Apr", &APR},
+            {"May", &MAY_ABBR}, {"Jun", &JUN}, {"Jul", &JUL}, {"Aug", &AUG},
+            {"Sep", &SEP}, {"Oct", &OCT}, {"Nov", &NOV}, {"Dec", &DEC},
         };
-        
-        std::string timeStrCopy = timeStr; // Convert the char array to a string for processing
-        
-        // Apply day and month replacements
-        size_t pos;
-        for (const auto& mapping : mappings) {
-            pos = timeStrCopy.find(mapping.first);
-            while (pos != std::string::npos) {
-                timeStrCopy.replace(pos, mapping.first.length(), *(mapping.second));
-                pos = timeStrCopy.find(mapping.first, pos + mapping.second->length());
+    
+        std::string result = timeStr;
+        for (const auto& m : mappings) {
+            size_t pos = 0;
+            const size_t keyLen = strlen(m.key);
+            while ((pos = result.find(m.key, pos)) != std::string::npos) {
+                result.replace(pos, keyLen, *m.val);
+                pos += m.val->size();
             }
         }
-        
-        // Copy the modified string back to the character array
-        strcpy(timeStr, timeStrCopy.c_str());
+        strcpy(timeStr, result.c_str());
     }
     #endif
 
-    // Unified function to apply replacements
     void applyLangReplacements(std::string& text, bool isValue) {
         if (isValue) {
-            // Direct comparison for value replacements
-            if (text.length() == 2) {
-                if (text[0] == 'O') {
-                    if (text[1] == 'n') {
-                        text = ON;
-                        return;
-                    } else if (text[1] == 'f' && text == "Off") {
-                        text = OFF;
-                        return;
-                    }
-                }
-            }
+            if (text.length() == 2 && text[0] == 'O' && text[1] == 'n') { text = ON; return; }
+            if (text.length() == 3 && text[0] == 'O' && text[1] == 'f' && text[2] == 'f') { text = OFF; return; }
         }
         #if IS_LAUNCHER_DIRECTIVE
         else {
-            // Direct comparison for launcher replacements
             switch (text.length()) {
-                case 6:
-                    if (text == "Reboot") {
-                        text = REBOOT;
-                    }
-                    break;
-                case 8:
-                    if (text == "Shutdown") {
-                        text = SHUTDOWN;
-                    }
-                    break;
-                case 9:
-                    if (text == "Reboot To") {
-                        text = REBOOT_TO;
-                    }
-                    break;
-                case 10:
-                    if (text == "Boot Entry") {
-                        text = BOOT_ENTRY;
-                    }
-                    break;
+                case 6:  if (text == "Reboot")    { text = REBOOT;    } break;
+                case 8:  if (text == "Shutdown")  { text = SHUTDOWN;  } break;
+                case 9:  if (text == "Reboot To") { text = REBOOT_TO; } break;
+                case 10: if (text == "Boot Entry"){ text = BOOT_ENTRY;} break;
             }
         }
         #endif
     }
     
-    
-    
-    // Predefined hexMap
-    //const std::array<int, 256> hexMap = [] {
-    //    std::array<int, 256> map = {0};
-    //    map['0'] = 0; map['1'] = 1; map['2'] = 2; map['3'] = 3; map['4'] = 4;
-    //    map['5'] = 5; map['6'] = 6; map['7'] = 7; map['8'] = 8; map['9'] = 9;
-    //    map['A'] = 10; map['B'] = 11; map['C'] = 12; map['D'] = 13; map['E'] = 14; map['F'] = 15;
-    //    map['a'] = 10; map['b'] = 11; map['c'] = 12; map['d'] = 13; map['e'] = 14; map['f'] = 15;
-    //    return map;
-    //}();
-    
-    
-    // Prepare a map of default settings
-    std::map<const std::string, std::string> defaultThemeSettingsMap = {
-        {"default_overlay_color", whiteColor},
-        {"default_package_color", whiteColor},
-        {"default_script_color", "FF33FF"},
-        {"clock_color", whiteColor},
-        {"temperature_color", whiteColor},
-        {"battery_color", "ffff45"},
-        {"battery_charging_color", "00FF00"},
-        {"battery_low_color", "FF0000"},
-        {"widget_backdrop_alpha", "15"},
-        {"widget_backdrop_color", blackColor},
-        {"bg_alpha", "13"},
-        {"bg_color", blackColor},
-        {"separator_alpha", "15"},
-        {"separator_color", "404040"},
-        {"text_separator_color", "404040"},
-        {"text_color", whiteColor},
-        {"notification_text_color", whiteColor},
-        {"header_text_color", whiteColor},
-        {"header_separator_color", whiteColor},
-        {"star_color", whiteColor},
-        {"selection_star_color", whiteColor},
-        {"bottom_button_color", whiteColor},
-        {"bottom_text_color", whiteColor},
-        {"bottom_separator_color", whiteColor},
-        {"top_separator_color", "404040"},
-        {"table_bg_color", "2C2C2C"},
-        {"table_bg_alpha", "14"},
-        {"table_section_text_color", whiteColor},
-        //{"table_info_text_color", "00FFDD"},
-        {"table_info_text_color", "9ed0ff"},
-        {"warning_text_color", "FF7777"},
-        {"healthy_ram_text_color", "00FF00"},
-        {"neutral_ram_text_color", "FFAA00"},
-        {"bad_ram_text_color", "FF0000"},
-        {"trackbar_slider_color", "606060"},
-        {"trackbar_slider_border_color", "505050"},
-        {"trackbar_slider_malleable_color", "A0A0A0"},
-        {"trackbar_full_color", "00FFDD"},
-        {"trackbar_empty_color", "404040"},
-        {"overlay_text_color", whiteColor},
-        {"ult_overlay_text_color", "9ed0ff"},
-        {"package_text_color", whiteColor},
-        {"ult_package_text_color", "9ed0ff"},
-        {"banner_version_text_color", greyColor},
-        {"overlay_version_text_color", greyColor},
-        {"ult_overlay_version_text_color", "00FFDD"},
-        {"package_version_text_color", greyColor},
-        {"ult_package_version_text_color", "00FFDD"},
-        {"on_text_color", "00FFDD"},
-        {"off_text_color", greyColor},
-        {"invalid_text_color", "FF0000"},
-        {"inprogress_text_color", "FFFF45"},
-        {"selection_text_color", "9ed0ff"},
-        {"selection_value_text_color", "FF7777"},
-        {"selection_bg_color", blackColor},
-        {"selection_bg_alpha", "11"},
-        {"scrollbar_color", "555555"},
-        {"scrollbar_wall_color", "AAAAAA"},
-        {"highlight_color_1", "2288CC"},
-        {"highlight_color_2", "88FFFF"},
-        {"highlight_color_3", "FFFF45"},
-        {"highlight_color_4", "F7253E"},
-        {"click_text_color", whiteColor},
-        {"click_alpha", "7"},
-        {"click_color", "3E25F7"},
-        {"progress_alpha", "7"},
-        {"progress_color", "253EF7"},
-        {"invert_bg_click_color", FALSE_STR},
-        //{"disable_selection_bg", FALSE_STR},
-        //{"disable_selection_value_color", FALSE_STR},
-        //{"disable_colorful_logo", FALSE_STR},
-        {"logo_color_1", whiteColor},
-        {"logo_color_2", "FF0000"},
-        {"dynamic_logo_color_1", "00E669"},
-        {"dynamic_logo_color_2", "8080EA"}
-    };
-    
-    bool isNumericCharacter(char c) {
-        return std::isdigit(c);
-    }
-    
-    bool isValidHexColor(const std::string& hexColor) {
-        // Check if the string is a valid hexadecimal color of the format "#RRGGBB"
-        if (hexColor.size() != 6) {
-            return false; // Must be exactly 6 characters long
-        }
-        
-        for (char c : hexColor) {
-            if (!isxdigit(c)) {
-                return false; // Must contain only hexadecimal digits (0-9, A-F, a-f)
-            }
-        }
-        
-        return true;
-    }
     
     
     std::atomic<bool> refreshWallpaperNow(false);
@@ -1363,64 +862,47 @@ namespace ult {
     std::mutex wallpaperMutex;
     std::condition_variable cv;
     
+    bool loadRGBA8888toRGBA4444(const std::string& filePath, u8* dst, size_t srcSize) {
+        FILE* f = fopen(filePath.c_str(), "rb");
+        if (!f) return false;
     
-    void loadWallpaperFile(const std::string& filePath, s32 width, s32 height) {
-        const size_t originalDataSize = width * height * 4;
-        const size_t compressedDataSize = originalDataSize / 2;
-        
-        wallpaperData.resize(compressedDataSize);
-        
-        if (!isFileOrDirectory(filePath)) {
-            wallpaperData.clear();
-            return;
-        }
-        
-        FILE* file = fopen(filePath.c_str(), "rb");
-        if (!file) {
-            wallpaperData.clear();
-            return;
-        }
-
-        setvbuf(file, nullptr, _IOFBF, 256 * 1024);
-        
+        const uint8x8_t mask = vdup_n_u8(0xF0);
         constexpr size_t chunkBytes = 128 * 1024;
         uint8_t chunkBuffer[chunkBytes];
-        
         size_t totalRead = 0;
-        uint8_t* dst = wallpaperData.data();
-        const uint8x8_t mask = vdup_n_u8(0xF0);
-        
-        while (totalRead < originalDataSize) {
-            const size_t remaining = originalDataSize - totalRead;
-            const size_t toRead = remaining < chunkBytes ? remaining : chunkBytes;
-            
-            const size_t bytesRead = fread(chunkBuffer, 1, toRead, file);
-            if (bytesRead == 0) {
-                fclose(file);
-                wallpaperData.clear();
-                return;
-            }
-            
+    
+        setvbuf(f, nullptr, _IOFBF, chunkBytes);
+    
+        while (totalRead < srcSize) {
+            const size_t toRead = std::min(srcSize - totalRead, chunkBytes);
+            const size_t bytesRead = fread(chunkBuffer, 1, toRead, f);
+            if (bytesRead == 0) { fclose(f); return false; }
+    
             const uint8_t* src = chunkBuffer;
             size_t i = 0;
-            
-            // NEON: Process 16 bytes -> 8 bytes
             for (; i + 16 <= bytesRead; i += 16) {
                 uint8x16_t data = vld1q_u8(src + i);
                 uint8x8x2_t sep = vuzp_u8(vget_low_u8(data), vget_high_u8(data));
                 vst1_u8(dst, vorr_u8(vand_u8(sep.val[0], mask), vshr_n_u8(sep.val[1], 4)));
                 dst += 8;
             }
-            
-            // Scalar fallback
-            for (; i + 1 < bytesRead; i += 2) {
-                *dst++ = (src[i] & 0xF0) | (src[i + 1] >> 4);
-            }
-            
+            for (; i + 1 < bytesRead; i += 2)
+                *dst++ = (src[i] & 0xF0) | (src[i+1] >> 4);
+    
             totalRead += bytesRead;
         }
-        
-        fclose(file);
+    
+        fclose(f);
+        return true;
+    }
+
+    
+    void loadWallpaperFile(const std::string& filePath, s32 width, s32 height) {
+        const size_t srcSize = width * height * 4;
+        wallpaperData.resize(srcSize / 2);
+        if (!isFile(filePath) ||
+            !loadRGBA8888toRGBA4444(filePath, wallpaperData.data(), srcSize))
+            wallpaperData.clear();
     }
     
 
@@ -1428,7 +910,7 @@ namespace ult {
         if (expandedMemory && !inPlot.load(std::memory_order_acquire) && !refreshWallpaper.load(std::memory_order_acquire)) {
             std::unique_lock<std::mutex> lock(wallpaperMutex);
             cv.wait(lock, [] { return !inPlot.load(std::memory_order_acquire) && !refreshWallpaper.load(std::memory_order_acquire); });
-            if (wallpaperData.empty() && isFileOrDirectory(WALLPAPER_PATH)) {
+            if (wallpaperData.empty() && isFile(WALLPAPER_PATH)) {
                 loadWallpaperFile(WALLPAPER_PATH);
             }
         }
@@ -1449,7 +931,7 @@ namespace ult {
         wallpaperData.clear();
         
         // Reload the wallpaper file
-        if (isFileOrDirectory(WALLPAPER_PATH)) {
+        if (isFile(WALLPAPER_PATH)) {
             loadWallpaperFile(WALLPAPER_PATH);
         }
         
@@ -1461,13 +943,6 @@ namespace ult {
     }
 
     
-    
-    // Global variables for FPS calculation
-    //double lastTimeCount = 0.0;
-    //int frameCount = 0;
-    //float fps = 0.0f;
-    //double elapsedTime = 0.0;
-    
     std::atomic<bool> themeIsInitialized(false); // for loading the theme once in OverlayFrame / HeaderOverlayFrame
     
     // Variables for touch commands
@@ -1478,13 +953,9 @@ namespace ult {
     std::atomic<bool> shortTouchAndRelease(false);
     std::atomic<bool> longTouchAndRelease(false);
     std::atomic<bool> simulatedBack(false);
-    //bool simulatedBackComplete = true;
     std::atomic<bool> simulatedSelect(false);
-    //bool simulatedSelectComplete = true;
     std::atomic<bool> simulatedNextPage(false);
-    //std::atomic<bool> simulatedNextPageComplete(true);
     std::atomic<bool> simulatedMenu(false);
-    //bool simulatedMenuComplete = true;
     std::atomic<bool> stillTouching(false);
     std::atomic<bool> interruptedTouch(false);
     std::atomic<bool> touchInBounds(false);
@@ -1495,20 +966,11 @@ namespace ult {
     bool powerInitialized = false;
     bool powerCacheInitialized;
     uint32_t powerCacheCharge;
-    //float powerConsumption;
     bool powerCacheIsCharging;
     PsmSession powerSession;
     
-    // Define variables to store previous battery charge and time
-    //uint32_t prevBatteryCharge = 0;
-    //s64 timeOut = 0;
-    
-    
     std::atomic<uint32_t> batteryCharge{0};
     std::atomic<bool> isCharging{false};
-    //bool validPower;
-    
-    
     
     bool powerGetDetails(uint32_t *_batteryCharge, bool *_isCharging) {
         static uint64_t last_call_ns = 0;
@@ -1585,7 +1047,6 @@ namespace ult {
                     ult::powerGetDetails(&charge, &charging);
                     ult::batteryCharge.store(charge, std::memory_order_release);
                     ult::isCharging.store(charging, std::memory_order_release);
-                    //prevBatteryCharge = charge; // if needed
                 }
             }
         }
@@ -1702,7 +1163,6 @@ namespace ult {
     
     
     // Widget settings
-    //std::string hideClock, hideBattery, hidePCBTemp, hideSOCTemp;
     bool hideClock, hideBattery, hidePCBTemp, hideSOCTemp, dynamicWidgetColors;
     bool hideWidgetBackdrop, centerWidgetAlignment, extendedWidgetBackdrop;
 
@@ -1746,6 +1206,7 @@ namespace ult {
         return static_cast<u32>(bytes / 0x100000);
     }
     
+   
 
     // Helper function to get version-appropriate default heap size
     static OverlayHeapSize getDefaultHeapSize() {
@@ -1794,6 +1255,7 @@ namespace ult {
     }
     
     // Update the global default too
+    HeapSizeCache heapSizeCache;
     OverlayHeapSize currentHeapSize = getDefaultHeapSize();
     
     bool setOverlayHeapSize(OverlayHeapSize heapSize) {
@@ -1867,14 +1329,6 @@ namespace ult {
         cleanVersionLabels = getBoolValue("clean_version_labels", false);        // FALSE_STR default
         hideOverlayVersions = getBoolValue("hide_overlay_versions", false);      // FALSE_STR default  
         hidePackageVersions = getBoolValue("hide_package_versions", false);      // FALSE_STR default
-        //libultrahandTitles = getBoolValue("libultrahand_titles", false);               // FALSE_STR default
-        //useLibultrahandVersions = getBoolValue("libultrahand_versions", true);            // TRUE_STR default
-        //matchPackages = getBoolValue("match_packages", true);            // TRUE_STR default
-        
-        //#ifdef APP_VERSION
-        //versionLabel = cleanVersionLabel(APP_VERSION) + "  (" + loaderTitle + " " + cleanVersionLabel(loaderInfo) + ")";
-        //#endif
-        //versionLabel = (cleanVersionLabels) ? std::string(APP_VERSION) : (std::string(APP_VERSION) + "   (" + extractTitle(loaderInfo) + " v" + cleanVersionLabel(loaderInfo) + ")");
     }
     #endif
     
@@ -1883,20 +1337,11 @@ namespace ult {
     const unsigned numThreads = 4;//expandedMemory ? 4 : 0;
     std::vector<std::thread> renderThreads(numThreads);
 
+    void InPlotBarrierCompletion::operator()() noexcept {
+        inPlot.store(false, std::memory_order_release);
+    }
+    std::barrier<InPlotBarrierCompletion> inPlotBarrier(numThreads);
+
     const s32 bmpChunkSize = ((720 + numThreads - 1) / numThreads);
     std::atomic<s32> currentRow;
-    
-    //std::atomic<unsigned int> barrierCounter{0};
-    //std::mutex barrierMutex;
-    //std::condition_variable barrierCV;
-    //
-    //void barrierWait() {
-    //    std::unique_lock<std::mutex> lock(barrierMutex);
-    //    if (++barrierCounter == numThreads) {
-    //        barrierCounter = 0; // Reset for the next round
-    //        barrierCV.notify_all();
-    //    } else {
-    //        barrierCV.wait(lock, [] { return barrierCounter == 0; });
-    //    }
-    //}
 }

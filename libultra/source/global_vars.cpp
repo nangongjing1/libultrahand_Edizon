@@ -56,16 +56,18 @@ namespace ult {
     const std::string LANG_PATH                   = BASE_CONFIG_PATH + "lang/";
     const std::string THEMES_PATH                 = BASE_CONFIG_PATH + "themes/";
     const std::string WALLPAPERS_PATH             = BASE_CONFIG_PATH + "wallpapers/";
-    const std::string SOUNDS_PATH                 = BASE_CONFIG_PATH + "sounds/";
+    const std::string ASSETS_PATH                 = BASE_CONFIG_PATH + "assets/";
+    const std::string SOUNDS_PATH                 = BASE_CONFIG_PATH + ".sounds/";
+    const std::string LOADED_SOUNDS_PATH          = BASE_CONFIG_PATH + "sounds/";
     const std::string FLAGS_PATH                  = BASE_CONFIG_PATH + "flags/";
     const std::string NOTIFICATIONS_PATH          = BASE_CONFIG_PATH + "notifications/";
+    const std::string NOTIFICATIONS_ICONS_PATH    = ASSETS_PATH + "notifications/";
+    const std::string NOTIFICATIONS_FLAGS_PATH    = FLAGS_PATH + "notifications/";
     const std::string PAYLOADS_PATH               = BASE_CONFIG_PATH + "payloads/";
     const std::string HB_APPSTORE_JSON            = SWITCH_PATH + "appstore/.get/packages/UltrahandOverlay/info.json";
     std::string THEME_CONFIG_INI_PATH             = BASE_CONFIG_PATH + THEME_FILENAME;
     std::string WALLPAPER_PATH                    = BASE_CONFIG_PATH + WALLPAPER_FILENAME;
     const std::string DOWNLOADS_PATH              = BASE_CONFIG_PATH + "downloads/";
-
-    //const std::string EXPANSION_PATH              = BASE_CONFIG_PATH + "expansion/";
     const std::string FUSE_DATA_INI_PATH          = BASE_CONFIG_PATH + FUSE_FILENAME;
     const std::string PACKAGE_PATH                = SWITCH_PATH + ".packages/";
     const std::string OVERLAY_PATH                = SWITCH_PATH + ".overlays/";
@@ -87,12 +89,7 @@ namespace ult {
     const std::string INCLUDED_THEME_FOLDER_URL     = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/themes/";
     const std::string LATEST_RELEASE_INFO_URL       = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/RELEASE.ini";
     const std::string LATEST_UPDATER_INI_URL        = ULTRAHAND_REPO_URL + "releases/latest/download/update.ini";
-    //const std::string NX_OVLLOADER_ZIP_URL          = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader.zip";
-    //const std::string NX_OVLLOADER_PLUS_ZIP_URL     = GITHUB_BASE_URL + "nx-ovlloader/releases/latest/download/nx-ovlloader+.zip";
-    const std::string OLD_NX_OVLLOADER_ZIP_URL      = GITHUB_BASE_URL + "nx-ovlloader/releases/download/v1.0.8/nx-ovlloader.zip";
-    //const std::string OLD_NX_OVLLOADER_PLUS_ZIP_URL = GITHUB_BASE_URL + "nx-ovlloader/releases/download/v1.0.8/nx-ovlloader+.zip";
     const std::string UPDATER_PAYLOAD_URL           = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/payloads/ultrahand_updater.bin";
-    //const std::string SOUND_EFFECTS_URL             = GITHUB_RAW_BASE_URL + "Ultrahand-Overlay/main/sounds/sounds.zip";
 
     // Launch options
     const std::string LAUNCH_ARGS_STR       = "launch_args";
@@ -111,6 +108,8 @@ namespace ult {
     CONSTEXPR_STRING std::string TESLA_STR        = "tesla";
     CONSTEXPR_STRING std::string ERISTA_STR       = "erista";
     CONSTEXPR_STRING std::string MARIKO_STR       = "mariko";
+    CONSTEXPR_STRING std::string HANDHELD_STR     = "handheld";
+    CONSTEXPR_STRING std::string DOCKED_STR       = "docked";
     CONSTEXPR_STRING std::string KEY_COMBO_STR    = "key_combo";
     CONSTEXPR_STRING std::string DEFAULT_LANG_STR = "default_lang";
 
@@ -133,10 +132,14 @@ namespace ult {
     CONSTEXPR_STRING std::string MODE_STR             = "mode";
     CONSTEXPR_STRING std::string GROUPING_STR         = "grouping";
     CONSTEXPR_STRING std::string FOOTER_STR           = "footer";
+    const std::string FOOTER_HIGHLIGHT_STR            = "footer_highlight";
     CONSTEXPR_STRING std::string TOGGLE_STR           = "toggle";
     CONSTEXPR_STRING std::string LEFT_STR             = "left";
     CONSTEXPR_STRING std::string RIGHT_STR            = "right";
     CONSTEXPR_STRING std::string CENTER_STR           = "center";
+    CONSTEXPR_STRING std::string CHAR_STR             = "char";
+    CONSTEXPR_STRING std::string WORD_STR             = "word";
+    CONSTEXPR_STRING std::string NONE_STR             = "none";
     CONSTEXPR_STRING std::string HIDE_STR             = "hide";
     CONSTEXPR_STRING std::string STAR_STR             = "star";
     CONSTEXPR_STRING std::string PRIORITY_STR         = "priority";
@@ -174,6 +177,7 @@ namespace ult {
     CONSTEXPR_STRING std::string STAR_SYMBOL         = "\u2605";
     CONSTEXPR_STRING std::string DIVIDER_SYMBOL      = "";
     CONSTEXPR_STRING std::string NOTIFY_HEADER       = "  ";
+    CONSTEXPR_STRING std::string HOLD_A_SYMBOL       = "";
 
     const std::vector<std::string> THROBBER_SYMBOLS = {"", "", "", "", "", "", "", ""};
 
