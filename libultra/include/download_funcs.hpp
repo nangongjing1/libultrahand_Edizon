@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <switch.h>
 
+#include <sys/select.h>
 #define CURL_DISABLE_DEFLATE
 #include <curl/curl.h>
 #include <zlib.h>
@@ -39,6 +40,7 @@
 #include "get_funcs.hpp"
 #include "path_funcs.hpp"
 #include "debug_funcs.hpp"
+#include "tsl_utils.hpp"
 
 namespace ult {
     // Constants for buffer sizes

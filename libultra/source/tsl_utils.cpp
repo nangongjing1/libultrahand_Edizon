@@ -65,6 +65,8 @@ namespace ult {
     u16 DefaultFramebufferWidth = 448;            ///< Width of the framebuffer
     u16 DefaultFramebufferHeight = 720;           ///< Height of the framebuffer
 
+    bool windowedLayerPixelPerfect = false;
+
     std::unordered_map<std::string, std::string> translationCache;
     
     std::unordered_map<u64, OverlayCombo> g_entryCombos;
@@ -209,12 +211,15 @@ namespace ult {
     bool useRightAlignment = false;
     bool useSwipeToOpen = true;
     bool useLaunchCombos = true;
+    bool useLaunchRecall = true;
+    bool usePageRecall = true;
     bool useNotifications = true;
     bool useNotificationsHotkey = true;
     bool useStartupNotification = true;
     bool silenceNotifications = false;
     bool useSoundEffects = true;
     bool useHapticFeedback = false;
+    bool useAutoNTPSync = true;
     bool usePageSwap = false;
     bool useDynamicLogo = true;
     bool useSelectionBG = true;
@@ -417,6 +422,7 @@ namespace ult {
     std::string SHOW_DELETE;
     std::string SHOW_UNSUPPORTED;
     std::string PAGE_SWAP;
+    std::string PAGE_RECALL;
     std::string RIGHT_SIDE_MODE;
     std::string OVERLAY_VERSIONS;
     std::string PACKAGE_VERSIONS;
@@ -440,7 +446,7 @@ namespace ult {
     std::string OVERLAY_MEMORY;
     std::string NOT_ENOUGH_MEMORY;
     std::string WALLPAPER_SUPPORT_DISABLED;
-    std::string SOUND_SUPPORT_DISABLED;
+    //std::string SOUND_SUPPORT_DISABLED;
     std::string WALLPAPER_SUPPORT_ENABLED;
     std::string SOUND_SUPPORT_ENABLED;
     std::string EXIT_OVERLAY_SYSTEM;
@@ -457,6 +463,7 @@ namespace ult {
     std::string OPTIONS;
     std::string FAILED_TO_OPEN;
     std::string LAUNCH_COMBOS;
+    std::string LAUNCH_RECALL;
     std::string NOTIFICATIONS;
     std::string NOTIFICATION_SETTINGS;
     std::string SILENCE_NOTIFICATIONS;
@@ -471,6 +478,7 @@ namespace ult {
     std::string HOLD_FOR_4S;
 
     std::string HAPTIC_FEEDBACK;
+    std::string AUTO_NTP_SYNC;
     std::string OPAQUE_SCREENSHOTS;
     std::string PACKAGE_INFO;
     std::string _TITLE;
@@ -627,6 +635,7 @@ namespace ult {
         {&SHOW_DELETE,                "SHOW_DELETE",                "Show Delete"},
         {&SHOW_UNSUPPORTED,           "SHOW_UNSUPPORTED",           "Show Unsupported"},
         {&PAGE_SWAP,                  "PAGE_SWAP",                  "Page Swap"},
+        {&PAGE_RECALL,                "PAGE_RECALL",                "Page Recall"},
         {&RIGHT_SIDE_MODE,            "RIGHT_SIDE_MODE",            "Right-side Mode"},
         {&OVERLAY_VERSIONS,           "OVERLAY_VERSIONS",           "Overlay Versions"},
         {&PACKAGE_VERSIONS,           "PACKAGE_VERSIONS",           "Package Versions"},
@@ -650,7 +659,7 @@ namespace ult {
         {&OVERLAY_MEMORY,             "OVERLAY_MEMORY",             "Overlay Memory"},
         {&NOT_ENOUGH_MEMORY,          "NOT_ENOUGH_MEMORY",          "Not enough memory."},
         {&WALLPAPER_SUPPORT_DISABLED, "WALLPAPER_SUPPORT_DISABLED", "Wallpaper support disabled."},
-        {&SOUND_SUPPORT_DISABLED,     "SOUND_SUPPORT_DISABLED",     "Sound support disabled."},
+        //{&SOUND_SUPPORT_DISABLED,     "SOUND_SUPPORT_DISABLED",     "Sound support disabled."},
         {&WALLPAPER_SUPPORT_ENABLED,  "WALLPAPER_SUPPORT_ENABLED",  "Wallpaper support enabled."},
         {&SOUND_SUPPORT_ENABLED,      "SOUND_SUPPORT_ENABLED",      "Sound support enabled."},
         {&EXIT_OVERLAY_SYSTEM,        "EXIT_OVERLAY_SYSTEM",        "Exit Overlay System"},
@@ -667,6 +676,7 @@ namespace ult {
         {&OPTIONS,                    "OPTIONS",                    "Options"},
         {&FAILED_TO_OPEN,             "FAILED_TO_OPEN",             "Failed to open file"},
         {&LAUNCH_COMBOS,              "LAUNCH_COMBOS",              "Launch Combos"},
+        {&LAUNCH_RECALL,              "LAUNCH_RECALL",              "Launch Recall"},
         {&NOTIFICATIONS,              "NOTIFICATIONS",              "Notifications"},
         {&NOTIFICATION_SETTINGS,      "NOTIFICATION_SETTINGS",      "Notification Settings"},
         {&SILENCE_NOTIFICATIONS,      "SILENCE_NOTIFICATIONS",      "Silence Notifications"},
@@ -680,6 +690,7 @@ namespace ult {
         {&TAP,                        "TAP",                        "tap"},
         {&HOLD_FOR_4S,                "HOLD_FOR_4S",                "hold for 4s"},
         {&HAPTIC_FEEDBACK,            "HAPTIC_FEEDBACK",            "Haptic Feedback"},
+        {&AUTO_NTP_SYNC,              "AUTO_NTP_SYNC",              "Auto NTP Sync"},
         {&OPAQUE_SCREENSHOTS,         "OPAQUE_SCREENSHOTS",         "Opaque Screenshots"},
         {&PACKAGE_INFO,               "PACKAGE_INFO",               "Package Info"},
         {&_TITLE,                     "_TITLE",                     "Title"},
@@ -907,7 +918,7 @@ namespace ult {
     
 
     void loadWallpaperFileWhenSafe() {
-        if (expandedMemory && !inPlot.load(std::memory_order_acquire) && !refreshWallpaper.load(std::memory_order_acquire)) {
+        if (!limitedMemory && !inPlot.load(std::memory_order_acquire) && !refreshWallpaper.load(std::memory_order_acquire)) {
             std::unique_lock<std::mutex> lock(wallpaperMutex);
             cv.wait(lock, [] { return !inPlot.load(std::memory_order_acquire) && !refreshWallpaper.load(std::memory_order_acquire); });
             if (wallpaperData.empty() && isFile(WALLPAPER_PATH)) {
@@ -981,7 +992,7 @@ namespace ult {
         }
         
         // Get the current time in nanoseconds
-        const uint64_t now_ns = armTicksToNs(armGetSystemTick());
+        const uint64_t now_ns = nowNs();
         
         // 3 seconds in nanoseconds
         static constexpr uint64_t min_delay_ns = 3000000000ULL;
@@ -1166,28 +1177,26 @@ namespace ult {
     bool hideClock, hideBattery, hidePCBTemp, hideSOCTemp, dynamicWidgetColors;
     bool hideWidgetBackdrop, centerWidgetAlignment, extendedWidgetBackdrop;
 
+    // Shared helper: single hash lookup instead of count() + at()
+    static bool getBoolFromSection(const std::map<std::string, std::string>& section,
+                                   const std::string& key, bool defaultValue = false) {
+        const auto it = section.find(key);
+        return (it != section.end()) ? (it->second != FALSE_STR) : defaultValue;
+    }
+
     #if IS_LAUNCHER_DIRECTIVE
     void reinitializeWidgetVars() {
         // Load INI data once instead of 8 separate file reads
         auto ultrahandSection = getKeyValuePairsFromSection(ULTRAHAND_CONFIG_INI_PATH, ULTRAHAND_PROJECT_NAME);
         
-        // Helper lambda to safely get boolean values with proper defaults
-        auto getBoolValue = [&](const std::string& key, bool defaultValue = false) -> bool {
-            if (ultrahandSection.count(key) > 0) {
-                return (ultrahandSection.at(key) != FALSE_STR);
-            }
-            return defaultValue;
-        };
-        
-        // Set all values from the loaded section with correct defaults (matching initialization)
-        hideClock = getBoolValue("hide_clock", false);                           // FALSE_STR default
-        hideBattery = getBoolValue("hide_battery", true);                        // TRUE_STR default
-        hideSOCTemp = getBoolValue("hide_soc_temp", true);                       // TRUE_STR default  
-        hidePCBTemp = getBoolValue("hide_pcb_temp", true);                       // TRUE_STR default
-        dynamicWidgetColors = getBoolValue("dynamic_widget_colors", true);       // TRUE_STR default
-        hideWidgetBackdrop = getBoolValue("hide_widget_backdrop", false);        // FALSE_STR default
-        centerWidgetAlignment = getBoolValue("center_widget_alignment", true);   // TRUE_STR default
-        extendedWidgetBackdrop = getBoolValue("extended_widget_backdrop", false); // FALSE_STR default
+        hideClock             = getBoolFromSection(ultrahandSection, "hide_clock",               false);
+        hideBattery           = getBoolFromSection(ultrahandSection, "hide_battery",             true);
+        hideSOCTemp           = getBoolFromSection(ultrahandSection, "hide_soc_temp",            true);
+        hidePCBTemp           = getBoolFromSection(ultrahandSection, "hide_pcb_temp",            true);
+        dynamicWidgetColors   = getBoolFromSection(ultrahandSection, "dynamic_widget_colors",    true);
+        hideWidgetBackdrop    = getBoolFromSection(ultrahandSection, "hide_widget_backdrop",     false);
+        centerWidgetAlignment = getBoolFromSection(ultrahandSection, "center_widget_alignment",  true);
+        extendedWidgetBackdrop= getBoolFromSection(ultrahandSection, "extended_widget_backdrop", false);
     }
     #endif
     
@@ -1317,24 +1326,15 @@ namespace ult {
         // Load INI data once instead of 6 separate file reads
         auto ultrahandSection = getKeyValuePairsFromSection(ULTRAHAND_CONFIG_INI_PATH, ULTRAHAND_PROJECT_NAME);
         
-        // Helper lambda to safely get boolean values with proper defaults
-        auto getBoolValue = [&](const std::string& key, bool defaultValue = false) -> bool {
-            if (ultrahandSection.count(key) > 0) {
-                return (ultrahandSection.at(key) != FALSE_STR);
-            }
-            return defaultValue;
-        };
-        
-        // Set all values from the loaded section with correct defaults (matching initialization)
-        cleanVersionLabels = getBoolValue("clean_version_labels", false);        // FALSE_STR default
-        hideOverlayVersions = getBoolValue("hide_overlay_versions", false);      // FALSE_STR default  
-        hidePackageVersions = getBoolValue("hide_package_versions", false);      // FALSE_STR default
+        cleanVersionLabels  = getBoolFromSection(ultrahandSection, "clean_version_labels",  false);
+        hideOverlayVersions = getBoolFromSection(ultrahandSection, "hide_overlay_versions", false);
+        hidePackageVersions = getBoolFromSection(ultrahandSection, "hide_package_versions", false);
     }
     #endif
     
     
     // Number of renderer threads to use
-    const unsigned numThreads = 4;//expandedMemory ? 4 : 0;
+    constexpr unsigned numThreads = 4;//expandedMemory ? 4 : 0;
     std::vector<std::thread> renderThreads(numThreads);
 
     void InPlotBarrierCompletion::operator()() noexcept {

@@ -73,6 +73,8 @@ namespace ult {
     extern u16 DefaultFramebufferWidth;            ///< Width of the framebuffer
     extern u16 DefaultFramebufferHeight;           ///< Height of the framebuffer
 
+    extern bool windowedLayerPixelPerfect;
+
     extern std::unordered_map<std::string, std::string> translationCache;
 
     extern std::unordered_map<u64, OverlayCombo> g_entryCombos;
@@ -108,12 +110,15 @@ namespace ult {
     extern bool useRightAlignment;
     extern bool useSwipeToOpen;
     extern bool useLaunchCombos;
+    extern bool useLaunchRecall;
+    extern bool usePageRecall;
     extern bool useNotifications;
     extern bool useNotificationsHotkey;
     extern bool useStartupNotification;
     extern bool silenceNotifications;
     extern bool useSoundEffects;
     extern bool useHapticFeedback;
+    extern bool useAutoNTPSync;
     extern bool usePageSwap;
     extern std::atomic<bool> noClickableItems;
 
@@ -328,6 +333,8 @@ namespace ult {
     extern std::string SHOW_UNSUPPORTED;
 
     extern std::string PAGE_SWAP;
+    extern std::string PAGE_RECALL;
+    extern std::string LAUNCH_RECALL;
     extern std::string RIGHT_SIDE_MODE;
     extern std::string OVERLAY_VERSIONS;
     extern std::string PACKAGE_VERSIONS;
@@ -352,7 +359,7 @@ namespace ult {
     extern std::string OVERLAY_MEMORY;
     extern std::string NOT_ENOUGH_MEMORY;
     extern std::string WALLPAPER_SUPPORT_DISABLED;
-    extern std::string SOUND_SUPPORT_DISABLED;
+    //extern std::string SOUND_SUPPORT_DISABLED;
     extern std::string WALLPAPER_SUPPORT_ENABLED;
     extern std::string SOUND_SUPPORT_ENABLED;
     extern std::string EXIT_OVERLAY_SYSTEM;
@@ -386,6 +393,7 @@ namespace ult {
     extern std::string HOLD_FOR_4S;
 
     extern std::string HAPTIC_FEEDBACK;
+    extern std::string AUTO_NTP_SYNC;
     extern std::string OPAQUE_SCREENSHOTS;
 
     extern std::string PACKAGE_INFO;

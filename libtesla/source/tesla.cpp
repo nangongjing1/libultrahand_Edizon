@@ -26,12 +26,43 @@
 // 69-line file I/O + malloc body: inlining it into every TU would bloat every
 // object file that includes tesla.hpp. Called from exactly one place.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// detectLNY2FromBuffers — the shared core of all MOD0/LNY2 checks.
+// Both usingLNY2() and getOverlayInfo() (utils.hpp) call this so the
+// detection logic lives in exactly one place.
+// ---------------------------------------------------------------------------
+bool detectLNY2FromBuffers(const uint8_t* frontBuf, size_t frontReadSize,
+                           uint32_t text_offset, uint32_t mod0_rel,
+                           size_t fileSz, FILE* file)
+{
+    if (text_offset >= fileSz || mod0_rel == 0 || text_offset > fileSz - mod0_rel)
+        return false;
+
+    const uint32_t mod0_offset = text_offset + mod0_rel;
+
+    // MOD0 is within the already-loaded front buffer
+    if (mod0_offset < frontReadSize && mod0_offset <= frontReadSize - 60) {
+        const uint8_t* p = frontBuf + mod0_offset;
+        if (memcmp(p, "MOD0", 4) == 0 && memcmp(p + 52, "LNY2", 4) == 0)
+            return *reinterpret_cast<const uint32_t*>(p + 56) >= 1;
+    }
+    // MOD0 lies beyond the front buffer — do a targeted read
+    else if (mod0_offset < fileSz && mod0_offset <= fileSz - 60) {
+        uint8_t mod0Buf[60];
+        fseek(file, mod0_offset, SEEK_SET);
+        if (fread(mod0Buf, 1, 60, file) == 60) {
+            if (memcmp(mod0Buf, "MOD0", 4) == 0 && memcmp(mod0Buf + 52, "LNY2", 4) == 0)
+                return *reinterpret_cast<const uint32_t*>(mod0Buf + 56) >= 1;
+        }
+    }
+    return false;
+}
+
 bool usingLNY2(const std::string& filePath) {
     FILE* file = fopen(filePath.c_str(), "rb");
     if (!file)
         return false;
 
-    // --- Get file size ---
     fseek(file, 0, SEEK_END);
     const long fileSize = ftell(file);
     if (fileSize < (long)(sizeof(NroStart) + sizeof(NroHeader))) {
@@ -41,55 +72,23 @@ bool usingLNY2(const std::string& filePath) {
     const size_t fileSz = (size_t)fileSize;
     fseek(file, 0, SEEK_SET);
 
-    // --- Read front chunk (header + MOD0 area) ---
     constexpr size_t FRONT_READ_SIZE = 8192;
     const size_t frontReadSize = (fileSz < FRONT_READ_SIZE) ? fileSz : FRONT_READ_SIZE;
     uint8_t* frontBuf = (uint8_t*)malloc(frontReadSize);
-    if (!frontBuf) {
-        fclose(file);
-        return false;
-    }
+    if (!frontBuf) { fclose(file); return false; }
 
     if (fread(frontBuf, 1, frontReadSize, file) != frontReadSize) {
-        free(frontBuf);
-        fclose(file);
-        return false;
+        free(frontBuf); fclose(file); return false;
     }
 
-    // --- Extract offsets directly (no NroHeader copy needed) ---
     const uint32_t mod0_rel    = *reinterpret_cast<const uint32_t*>(frontBuf + 0x4);
     const uint32_t text_offset = *reinterpret_cast<const uint32_t*>(frontBuf + 0x20);
 
-    bool isNew = false;
-
-    // --- MOD0 detection ---
-    if (text_offset < fileSz && mod0_rel != 0 && text_offset <= fileSz - mod0_rel) {
-        const uint32_t mod0_offset = text_offset + mod0_rel;
-
-        // --- MOD0 is inside front buffer ---
-        if (mod0_offset <= frontReadSize - 60) {
-            const uint8_t* mod0_ptr = frontBuf + mod0_offset;
-            if (memcmp(mod0_ptr, "MOD0", 4) == 0 &&
-                memcmp(mod0_ptr + 52, "LNY2", 4) == 0) {
-                isNew = (*reinterpret_cast<const uint32_t*>(mod0_ptr + 56) >= 1);
-            }
-        }
-        // --- MOD0 must be read separately ---
-        else if (mod0_offset <= fileSz - 60) {
-            uint8_t mod0Buf[60];
-            fseek(file, mod0_offset, SEEK_SET);
-            if (fread(mod0Buf, 1, 60, file) == 60) {
-                if (memcmp(mod0Buf, "MOD0", 4) == 0 &&
-                    memcmp(mod0Buf + 52, "LNY2", 4) == 0) {
-                    isNew = (*reinterpret_cast<const uint32_t*>(mod0Buf + 56) >= 1);
-                }
-            }
-        }
-    }
-
+    const bool result = detectLNY2FromBuffers(frontBuf, frontReadSize,
+                                              text_offset, mod0_rel, fileSz, file);
     free(frontBuf);
     fclose(file);
-    return isNew;
+    return result;
 }
 
 namespace tsl {
@@ -141,10 +140,10 @@ Color ultPackageVersionTextColor;
 Color onTextColor;
 Color offTextColor;
 
-#if IS_LAUNCHER_DIRECTIVE
+//#if IS_LAUNCHER_DIRECTIVE
 Color dynamicLogoRGB1;
 Color dynamicLogoRGB2;
-#endif
+//#endif
 
 bool   invertBGClickColor = false;
 
@@ -325,19 +324,21 @@ void initializeThemeVars() {
         return ult::stoi(getValue(key));
     };
 
-    #if IS_LAUNCHER_DIRECTIVE
+
     logoColor1      = getColor("logo_color_1");
     logoColor2      = getColor("logo_color_2");
+
+    //#if IS_LAUNCHER_DIRECTIVE
     dynamicLogoRGB1 = getColor("dynamic_logo_color_1");
     dynamicLogoRGB2 = getColor("dynamic_logo_color_2");
-    #endif
+    //#endif
 
     defaultBackgroundAlpha       = getAlpha("bg_alpha");
     defaultBackgroundColor       = getColor("bg_color", defaultBackgroundAlpha);
     defaultTextColor             = getColor("text_color");
     notificationTextColor        = getColor("notification_text_color");
     notificationTitleColor       = getColor("notification_title_color");
-    notificationTimeColor       = getColor("notification_time_color");
+    notificationTimeColor        = getColor("notification_time_color");
     headerTextColor              = getColor("header_text_color");
     headerSeparatorColor         = getColor("header_separator_color");
     starColor                    = getColor("star_color");
@@ -682,18 +683,20 @@ namespace impl {
     
         // Behavior flags — shared across all overlays
         ult::useLaunchCombos        = getBool("launch_combos",        true);
+        //ult::useLaunchRecall        = getBool("launch_recall",        true);
         ult::useNotifications       = getBool("notifications",        true);
         ult::useNotificationsHotkey = getBool("notifications_hotkey", true);
         ult::silenceNotifications   = getBool("silence_notifications");
         ult::useSoundEffects        = getBool("sound_effects",        true);
         ult::useHapticFeedback      = getBool("haptic_feedback");
+        ult::useAutoNTPSync         = getBool("auto_ntp_sync",        true);
         ult::useSwipeToOpen         = getBool("swipe_to_open",        true);
         ult::useOpaqueScreenshots   = getBool("opaque_screenshots",   true);
     
         // max_notifications — default to 3 so it's always clamped correctly
         {
             const std::string maxStr = getStr("max_notifications", "3");
-            const int cap = ult::limitedMemory ? 4 : tsl::NotificationPrompt::MAX_VISIBLE;
+            const int cap = tsl::NotificationPrompt::MAX_VISIBLE;
             tsl::maxNotifications = std::max(1, std::min(ult::stoi(maxStr), cap));
         }
     
@@ -983,6 +986,9 @@ bool NotificationPrompt::hasActiveFile(std::string_view fname) const {
 }
 
 int NotificationPrompt::findHitSlot_NoLock(s32 tx, s32 ty) const {
+    // In windowed mode the layer is offset in touch space; layerEdge already
+    // accounts for X.  Subtract layerEdgeY to bring ty into framebuffer-local space.
+    ty -= layerEdgeY;
     const s32 sx = (ult::useRightAlignment
         ? static_cast<s32>(tsl::cfg::FramebufferWidth) - NOTIF_WIDTH
         : 0) + static_cast<s32>(ult::layerEdge);
@@ -999,7 +1005,7 @@ int NotificationPrompt::findHitSlot_NoLock(s32 tx, s32 ty) const {
 }
 
 void NotificationPrompt::draw(gfx::Renderer* renderer, bool promptOnly) {
-    if (ult::launchingOverlay.load(std::memory_order_acquire) || isStale()) return;
+    if (isStale()) return;
     if (!enabled_.load(std::memory_order_acquire)) return;
 
     std::lock_guard<std::mutex> lg(state_mutex_);
@@ -1043,6 +1049,7 @@ void NotificationPrompt::update() {
         } else if (slot.flags & SLOT_SOUND_PENDING) {
             slot.flags &= ~SLOT_SOUND_PENDING;
             triggerNotificationSound.store(true, std::memory_order_release);
+            signalSound();
         }
 
         if (slot.data.iconPending) {

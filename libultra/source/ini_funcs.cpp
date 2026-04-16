@@ -380,7 +380,7 @@ namespace ult {
         auto bufferPtr = std::make_unique<char[]>(1024);
         char* buffer = bufferPtr.get();
         std::string line;
-        line.reserve(256);
+        //line.reserve(256);
         
         std::string key, value;
         key.reserve(64);
@@ -479,9 +479,8 @@ namespace ult {
                 sections.push_back(std::move(sectionName)); // Move for efficiency
             }
 
-            // Clear strings to reuse capacity
+            // Clear string to reuse capacity
             line.clear();
-            sectionName.clear();
         }
     
         fclose(file);
@@ -695,8 +694,6 @@ namespace ult {
         auto fileMutex = getFileMutex(fileToEdit);
         std::unique_lock<std::shared_mutex> lock(*fileMutex);
 
-        std::ios::sync_with_stdio(false);  // Disable synchronization between C++ and C I/O.
-    
         if (!isFile(fileToEdit)) {
             createDirectory(getParentDirFromPath(fileToEdit));
         }
@@ -1339,22 +1336,20 @@ namespace ult {
                 
                 argEnd = pos;
                 if (pos < end) ++pos; // Skip closing quote
+
+                // Always push quoted tokens, even empty ones ('' or "" are valid
+                // empty labels used in table rows to produce a blank left column).
+                commandParts.emplace_back(argStart, argEnd - argStart);
             } else {
                 // Unquoted argument
                 while (pos < end && *pos != ' ' && *pos != '\t' && *pos != '\'' && *pos != '"') {
                     ++pos;
                 }
                 argEnd = pos;
-            }
-            
-            //if (argEnd >= argStart) {
-            //    commandParts.emplace_back(argStart, argEnd - argStart);
-            //}
 
-            if (argEnd > argStart) {
                 // Skip standalone "=" — it's the INI assignment separator (key = value),
                 // never a meaningful command argument.
-                if (!(argEnd - argStart == 1 && *argStart == '=')) {
+                if (argEnd > argStart && !(argEnd - argStart == 1 && *argStart == '=')) {
                     commandParts.emplace_back(argStart, argEnd - argStart);
                 }
             }
@@ -1402,7 +1397,7 @@ namespace ult {
             if (buffer[0] == '[' && buffer[len-1] == ']') {
                 if (!currentSection.empty()) {
                     options.emplace_back(std::move(currentSection), std::move(sectionCommands));
-                    sectionCommands = std::vector<std::vector<std::string>>();
+                    sectionCommands.clear();
                     sectionCommands.reserve(16);
                 }
                 currentSection.assign(buffer + 1, len - 2);

@@ -40,6 +40,27 @@
 
 #pragma once
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+
+
+// ── Tesla targeted optimizations ─────────────────────────────
+#ifdef TESLA_TARGETED_SPEED
+    #define TESLA_OPT_SPEED_PUSH _Pragma("GCC push_options") _Pragma("GCC optimize(\"O3\")")
+    #define TESLA_OPT_SPEED_POP  _Pragma("GCC pop_options")
+#else
+    #define TESLA_OPT_SPEED_PUSH
+    #define TESLA_OPT_SPEED_POP
+#endif
+
+#ifdef TESLA_TARGETED_SIZE
+    #define TESLA_OPT_SIZE_PUSH _Pragma("GCC push_options") _Pragma("GCC optimize(\"Os\")")
+    #define TESLA_OPT_SIZE_POP  _Pragma("GCC pop_options")
+#else
+    #define TESLA_OPT_SIZE_PUSH
+    #define TESLA_OPT_SIZE_POP
+#endif
+
 
 #include <ultra.hpp>
 #include <switch.h>
@@ -66,18 +87,15 @@
 #include <map>
 
 
+
 // Define this makro before including tesla.hpp in your main file. If you intend
 // to use the tesla.hpp header in more than one source file, only define it once!
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
 
 #ifdef TESLA_INIT_IMPL
     #define STB_TRUETYPE_IMPLEMENTATION
 #endif
 #include "stb_truetype.h"
 
-#pragma GCC diagnostic pop
 
 #define ELEMENT_BOUNDS(elem) elem->getX(), elem->getY(), elem->getWidth(), elem->getHeight()
 
@@ -158,6 +176,14 @@ inline std::atomic<bool> skipDown{false};
 inline u32 offsetWidthVar = 112;
 inline std::string lastOverlayFilename;
 inline std::string lastOverlayMode;
+inline std::string lastOpenPackagePath;  // set by PackageMenu::createUI() when navigating via UI (not --package args)
+inline std::string comboReturnOverlayFilename;  // overlay that triggered a combo return; consumed by createOverlaysMenu to reposition cursor
+inline std::string comboReturnOverlayMode;      // mode arg of that overlay (stored for completeness; cursor always lands on the overlay row)
+inline std::string comboReturnPackageName;      // package folder that triggered a combo return; consumed by createPackagesMenu to reposition cursor
+
+static inline std::string returnOverlayPath{ult::OVERLAY_PATH + "ovlmenu.ovl"};
+inline bool skipClosingExitFeedback{false};
+inline bool skipInitialShowRumbleClick{false};
 
 inline std::mutex jumpItemMutex;
 inline std::string jumpItemName;
@@ -170,13 +196,23 @@ inline std::atomic<bool> screenshotsAreDisabled{false};
 inline std::atomic<bool> screenshotsAreForceDisabled{false};
 
 inline bool hideHidden = false;
-inline bool usingFocusColor = true;
+inline bool selectIsUsingFocusedColor = true;
+inline bool bypassUnfocused = false;
+inline std::string s_lastFocusedItemText; // tracks the text of whatever focusable item is currently focused
 
 inline std::atomic<bool> mainComboHasTriggered{false};
 inline std::atomic<bool> launchComboHasTriggered{false};
+
+
+// Signal helpers.
+inline LEvent hapticsEvent;   // wakes the dedicated haptics thread
+inline LEvent soundEvent;     // wakes the dedicated sound thread
+inline void signalHaptics()  { leventSignal(&hapticsEvent); }
+inline void signalSound()    { leventSignal(&soundEvent); }
+inline void signalFeedback() { leventSignal(&hapticsEvent); leventSignal(&soundEvent); }
+
 inline std::atomic<bool> feedbackPollerStop{false};
 inline std::atomic<bool> hidReinitInProgress{false};
-
 
 // Sound triggering variables
 inline std::atomic<bool> triggerNavigationSound{false};
@@ -203,12 +239,39 @@ __attribute__((noinline)) static void triggerFeedbackImpl(
         std::atomic<bool>& rumble, std::atomic<bool>& sound) {
     rumble.store(true, std::memory_order_release);
     sound.store(true, std::memory_order_release);
+    signalFeedback();
 }
-inline void triggerNavigationFeedback() { triggerFeedbackImpl(triggerRumbleClick, triggerNavigationSound); }
-inline void triggerWallFeedback()       { triggerFeedbackImpl(triggerRumbleClick, triggerWallSound); }
-inline void triggerEnterFeedback()      { triggerFeedbackImpl(triggerRumbleClick, triggerEnterSound); }
-inline void triggerExitFeedback()       { triggerFeedbackImpl(triggerRumbleDoubleClick, triggerExitSound); }
+inline void triggerNavigationFeedback()                   { triggerFeedbackImpl(triggerRumbleClick, triggerNavigationSound); }
+inline void triggerWallFeedback(bool doubleClick = false) { triggerFeedbackImpl(!doubleClick ? triggerRumbleClick : triggerRumbleDoubleClick, triggerWallSound); }
+inline void triggerEnterFeedback()                        { triggerFeedbackImpl(triggerRumbleClick, triggerEnterSound); }
+inline void triggerExitFeedback()                         { triggerFeedbackImpl(triggerRumbleDoubleClick, triggerExitSound); }
+inline void triggerOnFeedback()                           { triggerFeedbackImpl(triggerRumbleClick, triggerOnSound); }
+inline void triggerOffFeedback(bool doubleClick = false)  { triggerFeedbackImpl(!doubleClick ? triggerRumbleClick : triggerRumbleDoubleClick, triggerOffSound); }
+inline void triggerSettingsFeedback()                     { triggerFeedbackImpl(triggerRumbleClick, triggerSettingsSound); }
+inline void triggerMoveFeedback(bool doubleClick = false) { triggerFeedbackImpl(!doubleClick ? triggerRumbleClick : triggerRumbleDoubleClick, triggerMoveSound); }
 
+// Rumble-only helpers (no paired sound) — store + signal in one call so the
+// poller is always woken immediately regardless of its current sleep timeout.
+inline void triggerRumbleClickFeedback() {
+    triggerRumbleClick.store(true, std::memory_order_release);
+    signalHaptics();
+}
+inline void triggerRumbleDoubleClickFeedback() {
+    triggerRumbleDoubleClick.store(true, std::memory_order_release);
+    signalHaptics();
+}
+
+
+/**
+ * @brief Shared MOD0/LNY2 detection helper — defined once in tesla.cpp.
+ *
+ * Given an already-opened front buffer and file handle, checks whether the
+ * overlay uses a libnx version that includes the LNY2 tag.  Called by both
+ * usingLNY2() and getOverlayInfo() to avoid duplicating this logic.
+ */
+bool detectLNY2FromBuffers(const uint8_t* frontBuf, size_t frontReadSize,
+                           uint32_t text_offset, uint32_t mod0_rel,
+                           size_t fileSz, FILE* file);
 
 /**
  * @brief Checks if an NRO file uses new libnx (has LNY2 tag).
@@ -244,6 +307,11 @@ namespace tsl {
     // Shared static specialChars vectors — avoids duplicate static init at each call site
     inline const std::vector<std::string> s_dividerSpecialChars = {ult::DIVIDER_SYMBOL};
     inline const std::vector<std::string> s_footerSpecialChars  = {"\uE0E1","\uE0E0","\uE0ED","\uE0EE","\uE0E5"};
+
+    // Windowed-mode notification Y offset in touch space.
+    // Set to (g_win_pos_y * 2/3) by windowed overlay; 0 in normal mode.
+    // X is handled by ult::layerEdge which already exists for this purpose.
+    inline s32 layerEdgeY = 0;
 
     // Booleans
     inline std::atomic<bool> clearGlyphCacheNow(false);
@@ -283,24 +351,40 @@ namespace tsl {
         constexpr inline Color(u8 r, u8 g, u8 b, u8 a) : r(r), g(g), b(b), a(a) {}
     };
     
-    // Ultra-fast version - zero variables, optimized calculations
-    inline constexpr Color GradientColor(float temperature) {
-        if (temperature <= 35.0f) return Color(7, 7, 15, 0xFF);
-        if (temperature >= 65.0f) return Color(15, 0, 0, 0xFF);
-        
-        if (temperature < 45.0f) {
-            // Single calculation, avoid repetition
-            const float factor = (temperature - 35.0f) * 0.1f;
-            return Color(7 - 7 * factor, 7 + 8 * factor, 15 - 15 * factor, 0xFF);
+    struct TempGradientRange {
+        float t0, t1, t2, t3;
+        float inv01, inv12, inv23;
+    
+        // constexpr constructor → computed at compile time for constants
+        constexpr TempGradientRange(float a, float b, float c, float d)
+            : t0(a), t1(b), t2(c), t3(d),
+              inv01(1.0f / (b - a)),
+              inv12(1.0f / (c - b)),
+              inv23(1.0f / (d - c)) {}
+    };
+    
+    inline constexpr TempGradientRange DEFAULT_TEMP_RANGE(35.0f, 45.0f, 55.0f, 65.0f);
+    
+    inline constexpr Color GradientColor(
+        float temperature,
+        const TempGradientRange& r = DEFAULT_TEMP_RANGE
+    ) {
+        if (temperature <= r.t0) return Color(7, 7, 15, 0xF);
+        if (temperature >= r.t3) return Color(15, 0, 0, 0xF);
+    
+        if (temperature < r.t1) {
+            const float f = (temperature - r.t0) * r.inv01;
+            return Color(7 - 7 * f, 7 + 8 * f, 15 - 15 * f, 0xF);
         }
-        
-        if (temperature < 55.0f) {
-            return Color(15 * (temperature - 45.0f) * 0.1f, 15, 0, 0xFF);
+    
+        if (temperature < r.t2) {
+            const float f = (temperature - r.t1) * r.inv12;
+            return Color(15 * f, 15, 0, 0xF);
         }
-        
-        return Color(15, 15 - 15 * (temperature - 55.0f) * 0.1f, 0, 0xFF);
+    
+        const float f = (temperature - r.t2) * r.inv23;
+        return Color(15, 15 - 15 * f, 0, 0xF);
     }
-
 
     // Ultra-fast version - single variable, minimal branching
     inline Color RGB888(const std::string& hexColor, size_t alpha = 15, const std::string& defaultHexColor = ult::whiteColor) {
@@ -348,6 +432,7 @@ namespace tsl {
 
     inline bool overrideBackButton = false; // for properly overriding the automatic "go back" functionality of KEY_B button presses
     inline bool disableHiding = false; // for manually disabling the hide overlay functionality
+    inline std::atomic<bool> homeButtonPressedInGame{false}; ///< Set by the background poller when home fires during a game session (disableHiding=true); consumed each frame by the player GUI to release foreground.
 
     // Theme color variable definitions — defined once in tesla.cpp
     extern Color logoColor1;
@@ -394,10 +479,10 @@ namespace tsl {
     extern Color onTextColor;
     extern Color offTextColor;
 
-    #if IS_LAUNCHER_DIRECTIVE
+    //#if IS_LAUNCHER_DIRECTIVE
     extern Color dynamicLogoRGB1;
     extern Color dynamicLogoRGB2;
-    #endif
+    //#endif
 
     extern bool invertBGClickColor;
 
@@ -461,7 +546,6 @@ namespace tsl {
 
     void initializeTheme(const std::string& themeIniPath = ult::THEME_CONFIG_INI_PATH);
 
-
     extern std::vector<std::string> wrapText(
         const std::string& text,
         float maxWidth,
@@ -499,6 +583,8 @@ namespace tsl {
     class Overlay;
     namespace elm { class Element; }
     
+    void shiftItemFocus(elm::Element* element); // forward declare
+
     namespace impl {
         
         /**
@@ -780,12 +866,13 @@ namespace tsl {
     // Renderer
     
     namespace gfx {
-        
+        TESLA_OPT_SPEED_PUSH
+
         extern "C" u64 __nx_vi_layer_id;
         
 
         struct ScissoringConfig {
-            u32 x, y, w, h, x_max, y_max;
+            u32 x, y, x_max, y_max;  // w and h never read back — only precomputed x_max/y_max are used
         };
         
 
@@ -1175,14 +1262,11 @@ namespace tsl {
              * @param h Height
              */
             inline void enableScissoring(const u32 x, const u32 y, const u32 w, const u32 h) {
-                this->m_scissoringStack.emplace(x, y, w, h, x+w, y+h);
+                this->m_scissorStack[this->m_scissorDepth++] = {x, y, x + w, y + h};
             }
             
-            /**
-             * @brief Disables scissoring
-             */
             inline void disableScissoring() {
-                this->m_scissoringStack.pop();
+                --this->m_scissorDepth;
             }
             
             
@@ -1198,13 +1282,13 @@ namespace tsl {
             inline void setPixel(const u32 x, const u32 y, const Color& color) {
                 const u32 offset = this->getPixelOffset(x, y);
                 if (offset != UINT32_MAX) [[likely]] {
-                    Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
+                    Color* framebuffer = static_cast<Color*>(this->m_currentFramebuffer);
                     framebuffer[offset] = color;
                 }
             }
 
             inline void setPixelAtOffset(const u32 offset, const Color& color) {
-                Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
+                Color* framebuffer = static_cast<Color*>(this->m_currentFramebuffer);
                 framebuffer[offset] = color;
             }
 
@@ -1218,10 +1302,10 @@ namespace tsl {
              * @param alpha Opacity
              * @return Blended color
              */
-            static constexpr u8 inv_alpha_table[16] = {15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0};
-            
+            // inv_alpha_table removed — (15 - alpha) is a single SUB instruction,
+            // faster than a load and lets the compiler dead-strip the 16-byte table.
             inline u8 __attribute__((always_inline)) blendColor(const u8 src, const u8 dst, const u8 alpha) {
-                return ((src * inv_alpha_table[alpha]) + (dst * alpha)) >> 4;
+                return ((src * (15u - alpha)) + (dst * alpha)) >> 4;
             }
             
             /**
@@ -1236,7 +1320,7 @@ namespace tsl {
                 if (offset == UINT32_MAX) [[unlikely]]
                     return;
                 
-                Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
+                Color* framebuffer = static_cast<Color*>(this->m_currentFramebuffer);
                 const Color src = framebuffer[offset];
                 
                 // Direct write instead of calling setPixel
@@ -1255,7 +1339,7 @@ namespace tsl {
                 if (offset == UINT32_MAX) [[unlikely]]
                     return;
                 
-                Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
+                Color* framebuffer = static_cast<Color*>(this->m_currentFramebuffer);
                 const Color src = framebuffer[offset];
                 
                 // Direct write instead of calling setPixel
@@ -1267,50 +1351,8 @@ namespace tsl {
                 );
             }
 
-            // Batch version for setPixelBlendDst
-            inline void setPixelBlendDstBatch(const u32 baseX, const u32 baseY, 
-                                              const u8 red[16], const u8 green[16], 
-                                              const u8 blue[16], const u8 alpha[16], 
-                                              const s32 count) {
-                Color* framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
-                
-                for (s32 i = 0; i < count; ++i) {
-                    // Early exit for transparent pixels
-                    const u8 currentAlpha = alpha[i];
-                    if (currentAlpha == 0) [[unlikely]]
-                        continue;
-                    
-                    const u32 offset = this->getPixelOffset(baseX + i, baseY);
-                    if (offset == UINT32_MAX) [[unlikely]]
-                        continue;
-                    
-                    // Direct framebuffer read
-                    const Color src = framebuffer[offset];
-                    const u8 invAlpha = 0xF - currentAlpha;
-                    
-                    // Direct framebuffer write - skip setPixelAtOffset call
-                    framebuffer[offset] = Color(
-                        blendColor(src.r, red[i], currentAlpha),
-                        blendColor(src.g, green[i], currentAlpha),
-                        blendColor(src.b, blue[i], currentAlpha),
-                        currentAlpha + ((src.a * invAlpha) >> 4)
-                    );
-                }
-            }
-
-
-            /**
-             * @brief Draws a rectangle of given sizes
-             *
-             * @param x X pos
-             * @param y Y pos
-             * @param w Width
-             * @param h Height
-             * @param color Color
-             */
             inline void drawRect(const s32 x, const s32 y, const s32 w, const s32 h, const Color& color) {
-                // Early exit for invalid dimensions
-                //if (w <= 0 || h <= 0) return;
+                if (w <= 0 || h <= 0) [[unlikely]] return;
                 
                 // Calculate clipped bounds
                 const s32 x_start = x < 0 ? 0 : x;
@@ -1334,10 +1376,20 @@ namespace tsl {
              * @param color Color to draw
              */
             inline void processRectChunk(const s32 x_start, const s32 x_end, const s32 y_start, const s32 y_end, const Color& color) {
-                for (s32 yi = y_start; yi < y_end; ++yi) {
-                    for (s32 xi = x_start; xi < x_end; ++xi) {
-                        this->setPixelBlendDst(xi, yi, color);
-                    }
+                // Clamp to active scissor rectangle (mirrors getPixelOffset scissor check)
+                s32 xs = x_start, xe = x_end, ys = y_start, ye = y_end;
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = this->m_scissorStack[this->m_scissorDepth - 1];
+                    xs = std::max(xs, static_cast<s32>(sc.x));
+                    xe = std::min(xe, static_cast<s32>(sc.x_max));
+                    ys = std::max(ys, static_cast<s32>(sc.y));
+                    ye = std::min(ye, static_cast<s32>(sc.y_max));
+                    if (xs >= xe || ys >= ye) return;
+                }
+                u16* fb16 = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+                for (s32 yi = ys; yi < ye; ++yi) {
+                    const u32 rowBase = blockLinearYPart(static_cast<u32>(yi), offsetWidthVar);
+                    fillRowSpanNEON(fb16, rowBase, xs, xe, color);
                 }
             }
         
@@ -1367,35 +1419,24 @@ namespace tsl {
                 // Calculate visible dimensions
                 const s32 visibleHeight = y_end - y_start;
                 
-                // Calculate chunk size - divide rows among threads
-                const s32 chunkSize = std::max(1, visibleHeight / static_cast<s32>(ult::numThreads));
-                
-                // Launch threads using ult::renderThreads array
-                for (unsigned i = 0; i < static_cast<unsigned>(ult::numThreads); ++i) {
-                    const s32 startRow = y_start + (i * chunkSize);
-                    const s32 endRow = (i == static_cast<unsigned>(ult::numThreads) - 1) ? 
-                                      y_end : 
-                                      std::min(startRow + chunkSize, y_end);
-                    
-                    // Skip threads that have no work
-                    if (startRow >= endRow) {
-                        ult::renderThreads[i] = std::thread([](){}); // Empty thread (still needed for joining)
-                        continue;
-                    }
-                    
-                    // Use member function instead of lambda - much faster
-                    ult::renderThreads[i] = std::thread(&Renderer::processRectChunk, this, 
-                                                       x_start, x_end, startRow, endRow, color);
+                // Ceiling division: floor(h/n) silently drops up to (n-1) rows at the
+                // bottom of any rect whose height is not a multiple of numThreads.
+                const s32 n = static_cast<s32>(ult::numThreads);
+                const s32 chunkSize = std::max(1, (visibleHeight + n - 1) / n);
+                unsigned launched = 0u;
+                for (unsigned i = 0; i < static_cast<unsigned>(n); ++i) {
+                    const s32 startRow = y_start + static_cast<s32>(i) * chunkSize;
+                    if (startRow >= y_end) break;
+                    const s32 endRow = std::min(startRow + chunkSize, y_end);
+                    ult::renderThreads[launched++] = std::thread(&Renderer::processRectChunk, this,
+                                                                 x_start, x_end, startRow, endRow, color);
                 }
-                
-                // Join all ult::renderThreads
-                for (auto& t : ult::renderThreads) {
-                    t.join();
-                }
+                for (unsigned i = 0; i < launched; ++i)
+                    ult::renderThreads[i].join();
             }
 
             inline void drawRectAdaptive(s32 x, s32 y, s32 w, s32 h, const Color& color) {
-                if (ult::expandedMemory)
+                if (!ult::limitedMemory)
                     drawRectMultiThreaded(x, y, w, h, color);
                 else
                     drawRect(x, y, w, h, color);
@@ -1412,53 +1453,58 @@ namespace tsl {
              * @param color Color
              */
             inline void drawEmptyRect(s32 x, s32 y, s32 w, s32 h, Color color) {
-                // Only precompute values that are actually reused
                 const s32 x_end = x + w - 1;
                 const s32 y_end = y + h - 1;
-                
-                // Early exit for completely out-of-bounds rectangles
-                if (x_end < 0 || y_end < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight) [[unlikely]] {
-                    return;
-                }
-                
-                // These are reused for both horizontal lines
+
+                if (x_end < 0 || y_end < 0 ||
+                    x >= cfg::FramebufferWidth ||
+                    y >= cfg::FramebufferHeight) [[unlikely]] return;
+
                 const s32 line_x_start = x < 0 ? 0 : x;
-                const s32 line_x_end = x_end >= cfg::FramebufferWidth ? cfg::FramebufferWidth - 1 : x_end;
-                
-                // Draw top horizontal line
-                if (y >= 0 && y < cfg::FramebufferHeight) {
-                    for (s32 xi = line_x_start; xi <= line_x_end; ++xi) {
-                        this->setPixelBlendDst(xi, y, color);
-                    }
-                }
-                
-                // Draw bottom horizontal line (only if different from top)
-                if (h > 1 && y_end >= 0 && y_end < cfg::FramebufferHeight) {
-                    for (s32 xi = line_x_start; xi <= line_x_end; ++xi) {
-                        this->setPixelBlendDst(xi, y_end, color);
-                    }
-                }
-                
-                // Draw vertical lines only if there's space between horizontal lines
+                const s32 line_x_end   = x_end >= cfg::FramebufferWidth
+                                         ? cfg::FramebufferWidth - 1 : x_end;
+
+                u16* const fb16 = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+                const u32  owv  = offsetWidthVar;
+                const u8   alpha = color.a;
+
+                // ── Horizontal lines — NEON row fill (xe is exclusive) ────────────
+                if (y >= 0 && y < cfg::FramebufferHeight)
+                    fillRowSpanNEON(fb16,
+                        blockLinearYPart(static_cast<u32>(y), owv),
+                        line_x_start, line_x_end + 1, color);
+
+                if (h > 1 && y_end >= 0 && y_end < cfg::FramebufferHeight)
+                    fillRowSpanNEON(fb16,
+                        blockLinearYPart(static_cast<u32>(y_end), owv),
+                        line_x_start, line_x_end + 1, color);
+
+                // ── Vertical lines — precompute x-column offset once per side ─────
+                // blockLinearOffset(px, yPart) = yPart + xPart(px).
+                // xPart depends only on px, so hoist it out of the row loop.
                 if (h > 2) {
-                    // These are reused for both vertical lines
                     const s32 line_y_start = (y + 1) < 0 ? 0 : (y + 1);
-                    const s32 line_y_end = (y_end - 1) >= cfg::FramebufferHeight ? cfg::FramebufferHeight - 1 : (y_end - 1);
-                    
-                    // Only proceed if there are actually vertical pixels to draw
+                    const s32 line_y_end   = (y_end - 1) >= cfg::FramebufferHeight
+                                             ? cfg::FramebufferHeight - 1 : (y_end - 1);
+
                     if (line_y_start <= line_y_end) {
-                        // Left vertical line
                         if (x >= 0 && x < cfg::FramebufferWidth) {
-                            for (s32 yi = line_y_start; yi <= line_y_end; ++yi) {
-                                this->setPixelBlendDst(x, yi, color);
-                            }
+                            const u32 px = static_cast<u32>(x);
+                            const u32 xPartL = ((px >> 5u) << 12u) | ((px & 16u) << 3u)
+                                             | ((px & 8u)  <<  1u) |  (px & 7u);
+                            for (s32 yi = line_y_start; yi <= line_y_end; ++yi)
+                                blendPixelDirect(fb16,
+                                    blockLinearYPart(static_cast<u32>(yi), owv) + xPartL,
+                                    color, alpha);
                         }
-                        
-                        // Right vertical line (only if different from left)
                         if (w > 1 && x_end >= 0 && x_end < cfg::FramebufferWidth) {
-                            for (s32 yi = line_y_start; yi <= line_y_end; ++yi) {
-                                this->setPixelBlendDst(x_end, yi, color);
-                            }
+                            const u32 px = static_cast<u32>(x_end);
+                            const u32 xPartR = ((px >> 5u) << 12u) | ((px & 16u) << 3u)
+                                             | ((px & 8u)  <<  1u) |  (px & 7u);
+                            for (s32 yi = line_y_start; yi <= line_y_end; ++yi)
+                                blendPixelDirect(fb16,
+                                    blockLinearYPart(static_cast<u32>(yi), owv) + xPartR,
+                                    color, alpha);
                         }
                     }
                 }
@@ -1631,91 +1677,93 @@ namespace tsl {
                 const float r_f = static_cast<float>(radius);
                 const float r2 = r_f * r_f;
                 const u8 base_a = color.a;
-                const bool full_opacity = (base_a == 0xFF);
                 
                 const s32 bound = radius + 2;
-                const s32 clip_left = std::max(0, centerX - bound);
-                const s32 clip_right = std::min(static_cast<s32>(cfg::FramebufferWidth), centerX + bound);
-                const s32 clip_top = std::max(0, centerY - bound);
-                const s32 clip_bottom = std::min(static_cast<s32>(cfg::FramebufferHeight), centerY + bound);
+                s32 clip_left   = std::max(0, centerX - bound);
+                s32 clip_right  = std::min(static_cast<s32>(cfg::FramebufferWidth),  centerX + bound);
+                s32 clip_top    = std::max(0, centerY - bound);
+                s32 clip_bottom = std::min(static_cast<s32>(cfg::FramebufferHeight), centerY + bound);
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = this->m_scissorStack[this->m_scissorDepth - 1];
+                    clip_left   = std::max(clip_left,   static_cast<s32>(sc.x));
+                    clip_right  = std::min(clip_right,  static_cast<s32>(sc.x_max));
+                    clip_top    = std::max(clip_top,    static_cast<s32>(sc.y));
+                    clip_bottom = std::min(clip_bottom, static_cast<s32>(sc.y_max));
+                    if (clip_left >= clip_right || clip_top >= clip_bottom) return;
+                }
                 
-                const float offset = 0.353553f; // sqrt(2)/4
-                const float samples[8][2] = {
-                    {-offset, -offset}, {offset, -offset},
-                    {-offset, offset},  {offset, offset},
-                    {-0.5f, 0.0f},     {0.5f, 0.0f},
-                    {0.0f, -0.5f},     {0.0f, 0.5f}
+                static constexpr float kSamples[8][2] = {
+                    {-0.353553f, -0.353553f}, { 0.353553f, -0.353553f},
+                    {-0.353553f,  0.353553f}, { 0.353553f,  0.353553f},
+                    {-0.5f,  0.0f}, { 0.5f,  0.0f},
+                    { 0.0f, -0.5f}, { 0.0f,  0.5f}
                 };
-                
-                for (s32 yc = clip_top; yc < clip_bottom; ++yc) {
-                    const float py = static_cast<float>(yc - centerY) + 0.5f;
-                    const float py_sq = py * py;
-                    
-                    for (s32 xc = clip_left; xc < clip_right; ++xc) {
-                        const float px = static_cast<float>(xc - centerX) + 0.5f;
-                        const float px_sq = px * px;
-                        const float center_d2 = px_sq + py_sq;
-                        
-                        if (filled) {
-                            if (center_d2 <= r2 - r_f) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    if (full_opacity) this->setPixelAtOffset(off, color);
-                                    else this->setPixelBlendDst(xc, yc, color);
+
+                u16* fb16 = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+
+                // Loop-invariant thresholds — hoisted explicitly so -Os doesn't rematerialize.
+                const float inner_thresh = r2 - r_f;  // d² ≤ this → definitely inside
+                const float outer_thresh = r2 + r_f;  // d² > this → definitely outside
+
+                if (filled) {
+                    // Per-pixel x-scan: accumulate consecutive "definitely inside" pixels
+                    // into a span and flush via NEON; border pixels get 8-sample AA.
+                    // No sqrtf — the span boundary emerges naturally from the d²<r²-r test.
+                    for (s32 yc = clip_top; yc < clip_bottom; ++yc) {
+                        const float py    = static_cast<float>(yc - centerY) + 0.5f;
+                        const float py_sq = py * py;
+                        if (py_sq > outer_thresh) continue;
+                        const u32 rowBase = blockLinearYPart(static_cast<u32>(yc), offsetWidthVar);
+
+                        s32 span_xl = -1;
+                        for (s32 xc = clip_left; xc < clip_right; ++xc) {
+                            const float px = static_cast<float>(xc - centerX) + 0.5f;
+                            const float d2 = px*px + py_sq;
+                            if (d2 <= inner_thresh) {
+                                if (span_xl < 0) span_xl = xc;  // start span
+                            } else {
+                                if (span_xl >= 0) {
+                                    fillRowSpanNEON(fb16, rowBase, span_xl, xc, color);
+                                    span_xl = -1;
                                 }
-                                continue;
-                            } else if (center_d2 > r2 + r_f) {
-                                continue;
-                            }
-                            
-                            u32 inside_count = 0;
-                            for (u32 s = 0; s < 8; ++s) {
-                                const float sx = px + samples[s][0];
-                                const float sy = py + samples[s][1];
-                                if (sx*sx + sy*sy <= r2) {
-                                    inside_count++;
-                                }
-                            }
-                            
-                            if (inside_count > 0) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    Color c = color;
-                                    c.a = static_cast<u8>((base_a * inside_count + 4) / 8);
-                                    this->setPixelBlendDst(xc, yc, c);
-                                }
-                            }
-                        } else {
-                            const float inner_r2 = (r_f - 1.0f) * (r_f - 1.0f);
-                            
-                            if (center_d2 >= inner_r2 + r_f && center_d2 <= r2 - r_f) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    if (full_opacity) this->setPixelAtOffset(off, color);
-                                    else this->setPixelBlendDst(xc, yc, color);
-                                }
-                                continue;
-                            } else if (center_d2 < inner_r2 - r_f || center_d2 > r2 + r_f) {
-                                continue;
-                            }
-                            
-                            u32 inside_count = 0;
-                            for (u32 s = 0; s < 8; ++s) {
-                                const float sx = px + samples[s][0];
-                                const float sy = py + samples[s][1];
-                                const float sd2 = sx*sx + sy*sy;
-                                if (sd2 >= inner_r2 && sd2 <= r2) {
-                                    inside_count++;
+                                if (d2 <= outer_thresh) {
+                                    u32 cnt = 0;
+                                    for (u32 s = 0; s < 8; ++s) {
+                                        const float sx = px + kSamples[s][0], sy = py + kSamples[s][1];
+                                        if (sx*sx + sy*sy <= r2) ++cnt;
+                                    }
+                                    if (cnt) blendPixelDirect(fb16, blockLinearOffset((u32)xc, rowBase),
+                                                              color, (u8)((base_a * cnt + 4) / 8));
                                 }
                             }
-                            
-                            if (inside_count > 0) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    Color c = color;
-                                    c.a = static_cast<u8>((base_a * inside_count + 4) / 8);
-                                    this->setPixelBlendDst(xc, yc, c);
+                        }
+                        if (span_xl >= 0)
+                            fillRowSpanNEON(fb16, rowBase, span_xl, clip_right, color);
+                    }
+                } else {
+                    // Unfilled (outline) — per-pixel, band between (r-1)² and r²
+                    const float inner_r2  = (r_f - 1.0f) * (r_f - 1.0f);
+                    const float ring_hi   = inner_r2 + r_f;  // solid ring inner boundary
+                    const float ring_lo   = inner_r2 - r_f;  // AA ring inner boundary
+                    for (s32 yc = clip_top; yc < clip_bottom; ++yc) {
+                        const float py    = static_cast<float>(yc - centerY) + 0.5f;
+                        const float py_sq = py * py;
+                        if (py_sq > outer_thresh) continue;  // row entirely outside circle
+                        const u32 rowBase = blockLinearYPart(static_cast<u32>(yc), offsetWidthVar);
+                        for (s32 xc = clip_left; xc < clip_right; ++xc) {
+                            const float px = static_cast<float>(xc - centerX) + 0.5f;
+                            const float d2 = px*px + py_sq;
+                            if (d2 >= ring_hi && d2 <= inner_thresh) {
+                                blendPixelDirect(fb16, blockLinearOffset((u32)xc, rowBase), color, base_a);
+                            } else if (d2 >= ring_lo && d2 <= outer_thresh) {
+                                u32 cnt = 0;
+                                for (u32 s = 0; s < 8; ++s) {
+                                    const float sx = px + kSamples[s][0], sy = py + kSamples[s][1];
+                                    const float sd2 = sx*sx + sy*sy;
+                                    if (sd2 >= inner_r2 && sd2 <= r2) ++cnt;
                                 }
+                                if (cnt) blendPixelDirect(fb16, blockLinearOffset((u32)xc, rowBase),
+                                                          color, (u8)((base_a * cnt + 4) / 8));
                             }
                         }
                     }
@@ -1744,6 +1792,39 @@ namespace tsl {
                 const Color aaColor1 = {highlightColor.r, highlightColor.g, highlightColor.b, static_cast<u8>(highlightColor.a >> 1)};  // 50%
                 const Color aaColor2 = {highlightColor.r, highlightColor.g, highlightColor.b, static_cast<u8>(highlightColor.a >> 2)};  // 25%
                 
+                // ── Arc spans: hoist blockLinearYPart out of pixel loops ──────────────
+                // The original code called setPixelBlendDst per pixel, which recomputed
+                // the blockLinear y-contribution and checked scissor on every iteration.
+                // hspan computes rowBase once per y-value and uses blendPixelDirect
+                // (tiny: ~4 instructions for opaque colours).  No fillRowSpanNEON here —
+                // arc spans are ≤radius pixels wide, so the NEON loop would never fire
+                // and the function setup would inflate code size without benefit.
+                // Without always_inline, -Os outlines hspan to one copy, called 8× per step.
+                u16* const fb16 = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+                const u32  owv  = offsetWidthVar;
+                const u8   ha   = highlightColor.a;
+
+                // Scissor clip bounds — default to full framebuffer when no scissor.
+                const s32 fbW = static_cast<s32>(cfg::FramebufferWidth);
+                const s32 fbH = static_cast<s32>(cfg::FramebufferHeight);
+                s32 sc_x = 0, sc_xe = fbW, sc_y = 0, sc_ye = fbH;
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = this->m_scissorStack[this->m_scissorDepth - 1];
+                    sc_x  = static_cast<s32>(sc.x);
+                    sc_xe = static_cast<s32>(sc.x_max);
+                    sc_y  = static_cast<s32>(sc.y);
+                    sc_ye = static_cast<s32>(sc.y_max);
+                }
+
+                // Draw span [xs, xe) at row yr. xe is exclusive.
+                auto hspan = [&](s32 yr, s32 xs, s32 xe) {
+                    if (yr < sc_y || yr >= sc_ye) return;
+                    const u32 rb = blockLinearYPart(static_cast<u32>(yr), owv);
+                    const s32 x0c = std::max(sc_x, xs), x1c = std::min(sc_xe, xe);
+                    for (s32 i = x0c; i < x1c; ++i)
+                        blendPixelDirect(fb16, blockLinearOffset(static_cast<u32>(i), rb), highlightColor, ha);
+                };
+
                 // Circle drawing with AA - optimized Bresenham
                 s32 cx = radius;
                 s32 cy = 0;
@@ -1755,79 +1836,55 @@ namespace tsl {
                 
                 while (cx >= cy) {
                     // Pre-calculate Y coordinates (hoist invariants)
-                    const s32 topY1 = topCornerY - cy;
-                    const s32 topY2 = topCornerY - cx;
+                    const s32 topY1    = topCornerY    - cy;
+                    const s32 topY2    = topCornerY    - cx;
                     const s32 bottomY1 = bottomCornerY + cy;
                     const s32 bottomY2 = bottomCornerY + cx;
                     
-                    // Pre-calculate X bounds
-                    const s32 leftX1Start = leftCornerX - cx;
-                    const s32 leftX2Start = leftCornerX - cy;
+                    // X span bounds. Left spans: [start, leftCornerX); right: [start, end+1).
+                    const s32 leftX1Start  = leftCornerX  - cx;
+                    const s32 leftX2Start  = leftCornerX  - cy;
                     const s32 rightX1Start = rightCornerX + 1;
-                    const s32 rightX1End = rightCornerX + cx;
-                    const s32 rightX2End = rightCornerX + cy;
+                    const s32 rightX1End   = rightCornerX + cx;
+                    const s32 rightX2End   = rightCornerX + cy;
+
+                    // Eight spans across four rows.  hspan computes rowBase once per call.
+                    hspan(topY1,    leftX1Start,  leftCornerX);
+                    hspan(topY1,    rightX1Start, rightX1End + 1);
+                    hspan(topY2,    leftX2Start,  leftCornerX);
+                    hspan(topY2,    rightX1Start, rightX2End + 1);
+                    hspan(bottomY1, leftX1Start,  leftCornerX);
+                    hspan(bottomY1, rightX1Start, rightX1End + 1);
+                    hspan(bottomY2, leftX2Start,  leftCornerX);
+                    hspan(bottomY2, rightX1Start, rightX2End + 1);
                     
-                    // Draw filled spans - NOW PERFECTLY MIRRORED
-                    // Upper-left corner (exclusive)
-                    for (s32 i = leftX1Start; i < leftCornerX; i++) {
-                        this->setPixelBlendDst(i, topY1, highlightColor);
-                    }
-                    for (s32 i = leftX2Start; i < leftCornerX; i++) {
-                        this->setPixelBlendDst(i, topY2, highlightColor);
-                    }
-                    
-                    // Lower-left corner (NOW exclusive like top)
-                    for (s32 i = leftX1Start; i < leftCornerX; i++) {
-                        this->setPixelBlendDst(i, bottomY1, highlightColor);
-                    }
-                    for (s32 i = leftX2Start; i < leftCornerX; i++) {
-                        this->setPixelBlendDst(i, bottomY2, highlightColor);
-                    }
-                    
-                    // Upper-right corner (starts at +1)
-                    for (s32 i = rightX1Start; i <= rightX1End; i++) {
-                        this->setPixelBlendDst(i, topY1, highlightColor);
-                    }
-                    for (s32 i = rightX1Start; i <= rightX2End; i++) {
-                        this->setPixelBlendDst(i, topY2, highlightColor);
-                    }
-                    
-                    // Lower-right corner (NOW starts at +1 like top)
-                    for (s32 i = rightX1Start; i <= rightX1End; i++) {
-                        this->setPixelBlendDst(i, bottomY1, highlightColor);
-                    }
-                    for (s32 i = rightX1Start; i <= rightX2End; i++) {
-                        this->setPixelBlendDst(i, bottomY2, highlightColor);
-                    }
-                    
-                    // Add AA at step transitions
+                    // AA pixels at step transitions — rare single-pixel writes.
                     if (__builtin_expect(cx != lastCx && cy > 0, 0)) {
-                        // Pre-calculate AA pixel positions
                         const s32 cxAA = cx + 1;
                         
                         // Upper-left AA
-                        this->setPixelBlendDst(leftCornerX - cxAA, topY1, aaColor1);
+                        this->setPixelBlendDst(leftCornerX - cxAA, topY1,     aaColor1);
                         this->setPixelBlendDst(leftCornerX - cxAA, topY1 + 1, aaColor2);
-                        this->setPixelBlendDst(leftX2Start, topY2 - 1, aaColor1);
-                        this->setPixelBlendDst(leftX2Start + 1, topY2 - 1, aaColor2);
+                        this->setPixelBlendDst(leftX2Start,         topY2 - 1, aaColor1);
+                        this->setPixelBlendDst(leftX2Start + 1,     topY2 - 1, aaColor2);
                         
                         // Upper-right AA
-                        this->setPixelBlendDst(rightCornerX + cxAA, topY1, aaColor1);
-                        this->setPixelBlendDst(rightCornerX + cxAA, topY1 + 1, aaColor2);
-                        this->setPixelBlendDst(rightX2End, topY2 - 1, aaColor1);
-                        this->setPixelBlendDst(rightX2End - 1, topY2 - 1, aaColor2);
+                        this->setPixelBlendDst(rightCornerX + cxAA, topY1,         aaColor1);
+                        this->setPixelBlendDst(rightCornerX + cxAA, topY1 + 1,     aaColor2);
+                        this->setPixelBlendDst(rightX2End,           topY2 - 1,     aaColor1);
+                        this->setPixelBlendDst(rightX2End - 1,       topY2 - 1,     aaColor2);
                         
                         // Lower-left AA
-                        this->setPixelBlendDst(leftCornerX - cxAA, bottomY1, aaColor1);
+                        this->setPixelBlendDst(leftCornerX - cxAA, bottomY1,     aaColor1);
                         this->setPixelBlendDst(leftCornerX - cxAA, bottomY1 - 1, aaColor2);
-                        this->setPixelBlendDst(leftX2Start, bottomY2 + 1, aaColor1);
-                        this->setPixelBlendDst(leftX2Start + 1, bottomY2 + 1, aaColor2);
+                        this->setPixelBlendDst(leftX2Start,         bottomY2 + 1, aaColor1);
+                        this->setPixelBlendDst(leftX2Start + 1,     bottomY2 + 1, aaColor2);
                         
                         // Lower-right AA
-                        this->setPixelBlendDst(rightCornerX + cxAA, bottomY1, aaColor1);
+                        this->setPixelBlendDst(rightCornerX + cxAA, bottomY1,     aaColor1);
                         this->setPixelBlendDst(rightCornerX + cxAA, bottomY1 - 1, aaColor2);
-                        this->setPixelBlendDst(rightX2End, bottomY2 + 1, aaColor1);
-                        this->setPixelBlendDst(rightX2End - 1, bottomY2 + 1, aaColor2);
+                        this->setPixelBlendDst(rightX2End,           bottomY2 + 1, aaColor1);
+                        this->setPixelBlendDst(rightX2End - 1,       bottomY2 + 1, aaColor2);
                     }
                     
                     lastCx = cx;
@@ -1845,129 +1902,189 @@ namespace tsl {
                 }
             }
             
-            // Pre-compute all horizontal spans for the entire shape
-            struct HorizontalSpan {
-                s32 start_x, end_x;
-            };
-            
-            // Helper function - defined outside, compiler will inline
-            static inline void sampleAndBlendArcPixel(Renderer* self, s32 xp, s32 yc, 
-                                                      int px2, int cx2, int sx, int py2, int cy2, int sy,
-                                                      long long r2_scaled, const Color& color, u8 base_a) {
-                int hits = 0;
-                const long long dx1 = px2 + sx - cx2;
-                const long long dx2 = px2 - sx - cx2;
-                const long long dy1 = py2 + sy - cy2;
-                const long long dy2 = py2 - sy - cy2;
-                
-                if (dx1*dx1 + dy1*dy1 <= r2_scaled) ++hits;
-                if (dx1*dx1 + dy2*dy2 <= r2_scaled) ++hits;
-                if (dx2*dx2 + dy1*dy1 <= r2_scaled) ++hits;
-                if (dx2*dx2 + dy2*dy2 <= r2_scaled) ++hits;
-                
-                if (hits == 4) {
-                    self->setPixelBlendDst(xp, yc, color);
-                } else if (hits > 0) {
-                    u8 a = (base_a * hits + 2) >> 2;
-                    if (a) {
-                        Color c = color;
-                        c.a = a;
-                        self->setPixelBlendDst(xp, yc, c);
+            ALWAYS_INLINE static void blendPixelDirect(u16* fb16, u32 off, const Color& color, u8 a) noexcept {
+                if (a == 0xFu) {
+                    reinterpret_cast<Color*>(fb16)[off] = color;
+                } else {
+                    const u8 invA = static_cast<u8>(15u - a);
+                    const Color src = reinterpret_cast<const Color*>(fb16)[off];
+                    reinterpret_cast<Color*>(fb16)[off] = Color(
+                        static_cast<u8>(((src.r * invA) + (color.r * a)) >> 4u),
+                        static_cast<u8>(((src.g * invA) + (color.g * a)) >> 4u),
+                        static_cast<u8>(((src.b * invA) + (color.b * a)) >> 4u),
+                        a + static_cast<u8>((src.a * invA) >> 4u));
+                }
+            }
+
+            // dy1sq = (py2+1-cy2)^2 and dy2sq = (py2-1-cy2)^2 are constant across an
+            // entire row's arc loop (py2 and cy2 don't change per pixel).  The caller
+            // precomputes them once and passes them in, saving 2 multiplications per pixel.
+            static inline void sampleAndBlendArcPixel(u16* fb16, s32 xp, u32 rowBase,
+                                                      int px2, int cx2,
+                                                      long long dy1sq, long long dy2sq,
+                                                      long long r2_scaled,
+                                                      const Color& color, u8 base_a) noexcept {
+                const long long dx1 = px2 + 1 - cx2,  dx2 = px2 - 1 - cx2;
+                const long long dx1sq = dx1*dx1, dx2sq = dx2*dx2;
+                const int hits = (int)(dx1sq+dy1sq <= r2_scaled)
+                               + (int)(dx1sq+dy2sq <= r2_scaled)
+                               + (int)(dx2sq+dy1sq <= r2_scaled)
+                               + (int)(dx2sq+dy2sq <= r2_scaled);
+                if (hits == 0) return;
+                const u8 a = (hits == 4) ? color.a : static_cast<u8>((base_a * hits + 2) >> 2);
+                if (a == 0u) return;
+                blendPixelDirect(fb16, blockLinearOffset(static_cast<u32>(xp), rowBase), color, a);
+            }
+
+            ALWAYS_INLINE static void fillRowSpanNEON(u16* fb16, const u32 rowBase,
+                                                      const s32 xs, const s32 xe,
+                                                      const Color& color) {
+                const s32 span = xe - xs;
+                if (span <= 0) return;
+                const u32 bpX     = static_cast<u32>(xs);
+                const s32 prologue = static_cast<s32>((8u - (bpX & 7u)) & 7u);
+                const s32 pe      = std::min(prologue, span);
+
+                if (color.a == 0xFu) {
+                    // ── Full-opacity: zero reads, pure stores ──────────────────────
+                    const uint16x8_t vColor = vdupq_n_u16(color.rgba);
+                    s32 i = 0;
+                    for (; i < pe; ++i)
+                        fb16[blockLinearOffset(bpX + static_cast<u32>(i), rowBase)] = color.rgba;
+                    for (; i + 8 <= span; i += 8)
+                        vst1q_u16(fb16 + blockLinearOffset(bpX + static_cast<u32>(i), rowBase), vColor);
+                    for (; i < span; ++i)
+                        fb16[blockLinearOffset(bpX + static_cast<u32>(i), rowBase)] = color.rgba;
+                } else {
+                    // ── Partial-opacity: NEON blend ────────────────────────────────
+                    const u8  alpha  = color.a;
+                    const u8  invA   = static_cast<u8>(15u - alpha);
+                    const uint16x8_t vAlpha = vdupq_n_u16(alpha);
+                    const uint16x8_t vInvA  = vdupq_n_u16(invA);
+                    const uint16x8_t vDstR  = vdupq_n_u16(color.r);
+                    const uint16x8_t vDstG  = vdupq_n_u16(color.g);
+                    const uint16x8_t vDstB  = vdupq_n_u16(color.b);
+                    const uint16x8_t vMask4 = vdupq_n_u16(0x000Fu);
+
+                    auto scalarBlend = [&](s32 i) {
+                        const u32 off = blockLinearOffset(bpX + static_cast<u32>(i), rowBase);
+                        const Color src = reinterpret_cast<const Color*>(fb16)[off];
+                        reinterpret_cast<Color*>(fb16)[off] = Color(
+                            static_cast<u8>(((src.r * invA) + (color.r * alpha)) >> 4u),
+                            static_cast<u8>(((src.g * invA) + (color.g * alpha)) >> 4u),
+                            static_cast<u8>(((src.b * invA) + (color.b * alpha)) >> 4u),
+                            alpha + static_cast<u8>((src.a * invA) >> 4u));
+                    };
+
+                    s32 i = 0;
+                    for (; i < pe; ++i) scalarBlend(i);
+                    for (; i + 8 <= span; i += 8) {
+                        const u32 off = blockLinearOffset(bpX + static_cast<u32>(i), rowBase);
+                        const uint16x8_t src16 = vld1q_u16(fb16 + off);
+                        const uint16x8_t src_r = vandq_u16(src16, vMask4);
+                        const uint16x8_t src_g = vandq_u16(vshrq_n_u16(src16,  4), vMask4);
+                        const uint16x8_t src_b = vandq_u16(vshrq_n_u16(src16,  8), vMask4);
+                        const uint16x8_t src_a =            vshrq_n_u16(src16, 12);
+                        const uint16x8_t r_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(src_r, vInvA), vDstR, vAlpha), 4);
+                        const uint16x8_t g_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(src_g, vInvA), vDstG, vAlpha), 4);
+                        const uint16x8_t b_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(src_b, vInvA), vDstB, vAlpha), 4);
+                        const uint16x8_t a_out = vaddq_u16(vAlpha, vshrq_n_u16(vmulq_u16(src_a, vInvA), 4));
+                        vst1q_u16(fb16 + off,
+                            vorrq_u16(r_out,
+                            vorrq_u16(vshlq_n_u16(g_out,  4),
+                            vorrq_u16(vshlq_n_u16(b_out,  8),
+                                      vshlq_n_u16(a_out, 12)))));
                     }
+                    for (; i < span; ++i) scalarBlend(i);
                 }
             }
             
-            static void processRoundedRectChunk(Renderer* self, const s32 x, const s32 y, const s32 w, const s32 h,
-                                                const s32 radius, const Color& color,
-                                                const s32 startRow, const s32 endRow) {
+            // --- Optimized rounded rectangle chunk processor ---
+            static void processRoundedRectChunk(Renderer* self,
+                                                const s32 x, const s32 y,
+                                                const s32 w, const s32 h,
+                                                const s32 radius,
+                                                const Color& color,
+                                                const s32 startRow, const s32 endRow)
+            {
                 if (radius <= 0) return;
-            
+        
                 const s32 x_end = x + w;
                 const s32 y_end = y + h;
-            
-                const s32 clip_x     = std::max(0, x);
-                const s32 clip_x_end = std::min<s32>(cfg::FramebufferWidth, x_end);
-            
+        
+                // Clamp x/y extents to both framebuffer AND active scissor rectangle
+                s32 clip_x     = std::max(0, x);
+                s32 clip_x_end = std::min<s32>(cfg::FramebufferWidth, x_end);
+                s32 clip_y     = std::max(0, y);
+                s32 clip_y_end = std::min<s32>(cfg::FramebufferHeight, y_end);
+                if (self->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = self->m_scissorStack[self->m_scissorDepth - 1];
+                    clip_x     = std::max(clip_x,     static_cast<s32>(sc.x));
+                    clip_x_end = std::min(clip_x_end, static_cast<s32>(sc.x_max));
+                    clip_y     = std::max(clip_y,     static_cast<s32>(sc.y));
+                    clip_y_end = std::min(clip_y_end, static_cast<s32>(sc.y_max));
+                    if (clip_x >= clip_x_end || clip_y >= clip_y_end) return;
+                }
+        
                 const s32 left_arc_end    = x + radius - 1;
                 const s32 right_arc_start = x_end - radius;
                 const s32 top_arc_end     = y + radius - 1;
                 const s32 bottom_arc_start = y_end - radius;
-            
-                const int cx2_left  = 2 * (x + radius);
-                const int cx2_right = 2 * (x_end - radius);
-                const int cy2_top    = 2 * (y + radius);
-                const int cy2_bottom = 2 * (y_end - radius);
-            
+
                 const long long r2_scaled = 4LL * radius * radius;
-                const long long reject_threshold = (2LL*radius + 2)*(2LL*radius + 2);
-            
+                const long long reject_sq  = (2LL*radius + 2)*(2LL*radius + 2);
+
+                const s32 cx2_left  = 2 * (x + radius);
+                const s32 cx2_right = 2 * (x_end - radius);
+
                 const u8 base_a = color.a;
-            
-                // Pre-compute sample offsets (constant per corner)
-                const int sx_left   = ((x + radius)     & 1) ? -1 : 1;
-                const int sx_right  = ((x_end - radius) & 1) ? -1 : 1;
-                const int sy_top    = ((y + radius)     & 1) ? -1 : 1;
-                const int sy_bottom = ((y_end - radius) & 1) ? -1 : 1;
-            
-                alignas(64) u8 redArray[512], greenArray[512], blueArray[512], alphaArray[512];
-                const uint8x16_t rv = vdupq_n_u8(color.r);
-                const uint8x16_t gv = vdupq_n_u8(color.g);
-                const uint8x16_t bv = vdupq_n_u8(color.b);
-                const uint8x16_t av = vdupq_n_u8(color.a);
-                for (int i = 0; i < 512; i += 16) {
-                    vst1q_u8(redArray + i, rv);
-                    vst1q_u8(greenArray + i, gv);
-                    vst1q_u8(blueArray + i, bv);
-                    vst1q_u8(alphaArray + i, av);
-                }
-            
+                u16* fb16 = reinterpret_cast<u16*>(self->m_currentFramebuffer);
+
+                const int cy2_top = 2 * (y + radius);
+                const int cy2_bot = 2 * (y_end - radius);
+
                 for (s32 yc = startRow; yc < endRow; ++yc) {
-                    if (yc < y || yc >= y_end) continue;
-            
+                    if (yc < clip_y || yc >= clip_y_end) continue;
+
+                    const u32 rowBase = blockLinearYPart(static_cast<u32>(yc), offsetWidthVar);
                     const bool is_top = (yc <= top_arc_end);
                     const bool in_arc_rows = is_top || (yc >= bottom_arc_start);
-                    
+
                     if (!in_arc_rows) {
-                        s32 xs = std::max(clip_x, x);
-                        s32 xe = std::min(clip_x_end, x_end);
-                        for (s32 xp = xs; xp < xe; xp += 512)
-                            self->setPixelBlendDstBatch(xp, yc, redArray, greenArray, blueArray, alphaArray,
-                                                        std::min(512, xe - xp));
+                        fillRowSpanNEON(fb16, rowBase,
+                                        std::max(clip_x, x), std::min(clip_x_end, x_end), color);
                         continue;
                     }
-            
-                    const int cy2 = is_top ? cy2_top : cy2_bottom;
-                    const int py2 = 2 * yc + 1;
-                    const int sy = is_top ? sy_top : sy_bottom;
-            
-                    // Quick row reject
+
+                    const int cy2 = is_top ? cy2_top : cy2_bot;
+                    const int py2 = 2*yc + 1;
                     const long long dy = py2 - cy2;
-                    if (dy * dy > reject_threshold) continue;
-            
+                    if (dy*dy > reject_sq) continue;
+
+                    // dy1 = dy+1, dy2 = dy-1 — both constant for this row.
+                    // Precompute their squares here so sampleAndBlendArcPixel
+                    // only needs to compute the per-pixel dx terms.
+                    const long long dy1sq = (dy + 1) * (dy + 1);
+                    const long long dy2sq = (dy - 1) * (dy - 1);
+
                     const s32 xe = std::min(clip_x_end, x_end);
-                    s32 xp = std::max(clip_x, x);
-            
-                    // Left arc
-                    for (; xp <= left_arc_end && xp < xe; ++xp) {
-                        sampleAndBlendArcPixel(self, xp, yc, 2*xp + 1, cx2_left, sx_left, 
-                                               py2, cy2, sy, r2_scaled, color, base_a);
-                    }
-            
-                    // Middle flat
-                    s32 mid_start = std::max(xp, left_arc_end + 1);
-                    s32 mid_end   = std::min(xe, right_arc_start);
-                    if (mid_start < mid_end) {
-                        for (s32 bx = mid_start; bx < mid_end; bx += 512)
-                            self->setPixelBlendDstBatch(bx, yc, redArray, greenArray, blueArray, alphaArray,
-                                                        std::min(512, mid_end - bx));
-                    }
-            
-                    // Right arc
-                    xp = std::max(xp, right_arc_start);
-                    for (; xp < xe; ++xp) {
-                        sampleAndBlendArcPixel(self, xp, yc, 2*xp + 1, cx2_right, sx_right,
-                                               py2, cy2, sy, r2_scaled, color, base_a);
-                    }
+
+                    // Left corner arc
+                    for (s32 xp = std::max(clip_x, x); xp <= left_arc_end && xp < xe; ++xp)
+                        sampleAndBlendArcPixel(fb16, xp, rowBase,
+                                               2*xp + 1, cx2_left, dy1sq, dy2sq,
+                                               r2_scaled, color, base_a);
+
+                    // Middle flat span — NEON fill
+                    fillRowSpanNEON(fb16, rowBase,
+                                    std::max(clip_x, left_arc_end + 1),
+                                    std::min(xe, right_arc_start), color);
+
+                    // Right corner arc
+                    for (s32 xp = std::max(clip_x, right_arc_start); xp < xe; ++xp)
+                        sampleAndBlendArcPixel(fb16, xp, rowBase,
+                                               2*xp + 1, cx2_right, dy1sq, dy2sq,
+                                               r2_scaled, color, base_a);
                 }
             }
 
@@ -2013,11 +2130,8 @@ namespace tsl {
                 for (unsigned i = 0; i < static_cast<unsigned>(ult::numThreads); ++i) {
                     ult::renderThreads[i] = std::thread(threadTask);
                 }
-                
-                // Join all ult::renderThreads
-                for (auto& t : ult::renderThreads) {
-                    t.join();
-                }
+                for (unsigned i = 0; i < static_cast<unsigned>(ult::numThreads); ++i)
+                    ult::renderThreads[i].join();
             }
             
             /**
@@ -2044,7 +2158,7 @@ namespace tsl {
             }
             
             inline void drawRoundedRect(s32 x, s32 y, s32 w, s32 h, s32 radius, Color color) {
-                if (ult::expandedMemory)
+                if (!ult::limitedMemory)
                     drawRoundedRectMultiThreaded(x, y, w, h, radius, color);
                 else
                     drawRoundedRectSingleThreaded(x, y, w, h, radius, color);
@@ -2053,255 +2167,476 @@ namespace tsl {
                                                 
             inline void drawUniformRoundedRect(const s32 x, const s32 y, const s32 w, const s32 h, const Color& color) {
                 const s32 radius = h >> 1;
-                const s32 clip_left = std::max(0, x);
-                const s32 clip_top = std::max(0, y);
-                const s32 clip_right = std::min(static_cast<s32>(cfg::FramebufferWidth), x + w);
-                const s32 clip_bottom = std::min(static_cast<s32>(cfg::FramebufferHeight), y + h);
-                
+                // Clamp to framebuffer bounds
+                s32 clip_left   = std::max(0, x);
+                s32 clip_top    = std::max(0, y);
+                s32 clip_right  = std::min(static_cast<s32>(cfg::FramebufferWidth),  x + w);
+                s32 clip_bottom = std::min(static_cast<s32>(cfg::FramebufferHeight), y + h);
+
+                // Also clamp to active scissor rectangle
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = this->m_scissorStack[this->m_scissorDepth - 1];
+                    clip_left   = std::max(clip_left,   static_cast<s32>(sc.x));
+                    clip_right  = std::min(clip_right,  static_cast<s32>(sc.x_max));
+                    clip_top    = std::max(clip_top,    static_cast<s32>(sc.y));
+                    clip_bottom = std::min(clip_bottom, static_cast<s32>(sc.y_max));
+                }
+
                 if (clip_left >= clip_right || clip_top >= clip_bottom) return;
-                
-                const s32 x_end = x + w;
-                const s32 y_end = y + h;
-                const s32 corner_x_left = x + radius;
+
+                const s32 x_end          = x + w;
+                const s32 corner_x_left  = x + radius;
                 const s32 corner_x_right = x_end - radius - 1;
-                const s32 corner_y_top = y + radius;
-                const s32 corner_y_bottom = y_end - radius - 1;
-                const float r_f = static_cast<float>(radius);
-                const float r2 = r_f * r_f;
-                const float aa_thresh = r2 + 2.0f * r_f + 1.0f;
-                const u8 base_a = color.a;
-                const bool full_opacity = (base_a == 0xF);
-                
+                const s32 corner_y_top   = y + radius;
+                const s32 corner_y_bot   = y + h - radius - 1;
+                const float r_f          = static_cast<float>(radius);
+                const float r2           = r_f * r_f;
+                const float aa_thresh    = r2 + 2.0f * r_f + 1.0f;
+                const u8  base_a         = color.a;
+
+                u16* const fb16 = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+
                 for (s32 yc = clip_top; yc < clip_bottom; ++yc) {
-                    if (yc < y || yc >= y_end) continue;
-                    
-                    const bool in_corners = yc < corner_y_top || yc > corner_y_bottom;
-                    
+                    const u32 rowBase = blockLinearYPart(static_cast<u32>(yc), offsetWidthVar);
+                    const bool in_corners = (yc < corner_y_top) || (yc > corner_y_bot);
+
                     if (!in_corners) {
+                        // ── Full-width flat row — NEON fill, zero getPixelOffset calls ──
                         const s32 span_start = std::max(x, clip_left);
-                        const s32 span_end = std::min(x_end, clip_right);
-                        
-                        for (s32 xc = span_start; xc < span_end; ++xc) {
-                            const u32 off = this->getPixelOffset(xc, yc);
-                            if (off != UINT32_MAX) {
-                                if (full_opacity) {
-                                    this->setPixelAtOffset(off, color);
-                                } else {
-                                    this->setPixelBlendDst(xc, yc, color);
-                                }
-                            }
-                        }
-                    } else {
-                        const float dy = (yc < corner_y_top) ? static_cast<float>(corner_y_top - yc) : 
-                                                                 static_cast<float>(yc - corner_y_bottom);
-                        const float dy_sq = dy * dy;
-                        
-                        if (dy_sq > aa_thresh) continue;
-                        
-                        const float dy_half = dy - 0.5f;
-                        const float dy_half_sq = dy_half * dy_half;
-                        
-                        const s32 span_start = std::max(x, clip_left);
-                        const s32 span_end = std::min(x_end, clip_right);
-                        s32 xc = span_start;
-                        
-                        // Left corner/edge
-                        const s32 left_end = std::min(corner_x_left + 1, span_end);
-                        for (; xc < left_end; ++xc) {
-                            const float dx = static_cast<float>(corner_x_left - xc);
-                            const float dx_sq = dx * dx;
-                            const float d2 = dx_sq + dy_sq;
-                            
-                            if (d2 <= r2) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    if (full_opacity) this->setPixelAtOffset(off, color);
-                                    else this->setPixelBlendDst(xc, yc, color);
-                                }
-                            } else if (d2 <= aa_thresh) {
-                                const float dx_half = dx - 0.5f;
-                                float cov = 0.0f;
-                                if (dx_sq + dy_sq <= r2) cov += 0.25f;
-                                if (dx_half*dx_half + dy_sq <= r2) cov += 0.25f;
-                                if (dx_sq + dy_half_sq <= r2) cov += 0.25f;
-                                if (dx_half*dx_half + dy_half_sq <= r2) cov += 0.25f;
-                                
-                                if (cov > 0.0f) {
-                                    const u32 off = this->getPixelOffset(xc, yc);
-                                    if (off != UINT32_MAX) {
-                                        Color c = color;
-                                        c.a = static_cast<u8>((base_a * static_cast<u8>(cov * 15.0f + 0.5f)) / 15);
-                                        this->setPixelBlendDst(xc, yc, c);
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Middle section
-                        const s32 mid_end = std::min(corner_x_right, span_end);
-                        for (; xc < mid_end; ++xc) {
-                            const u32 off = this->getPixelOffset(xc, yc);
-                            if (off != UINT32_MAX) {
-                                if (full_opacity) this->setPixelAtOffset(off, color);
-                                else this->setPixelBlendDst(xc, yc, color);
-                            }
-                        }
-                        
-                        // Right corner/edge
-                        for (; xc < span_end; ++xc) {
-                            const float dx = static_cast<float>(xc - corner_x_right);
-                            const float dx_sq = dx * dx;
-                            const float d2 = dx_sq + dy_sq;
-                            
-                            if (d2 <= r2) {
-                                const u32 off = this->getPixelOffset(xc, yc);
-                                if (off != UINT32_MAX) {
-                                    if (full_opacity) this->setPixelAtOffset(off, color);
-                                    else this->setPixelBlendDst(xc, yc, color);
-                                }
-                            } else if (d2 <= aa_thresh) {
-                                const float dx_half = dx - 0.5f;
-                                float cov = 0.0f;
-                                if (dx_sq + dy_sq <= r2) cov += 0.25f;
-                                if (dx_half*dx_half + dy_sq <= r2) cov += 0.25f;
-                                if (dx_sq + dy_half_sq <= r2) cov += 0.25f;
-                                if (dx_half*dx_half + dy_half_sq <= r2) cov += 0.25f;
-                                
-                                if (cov > 0.0f) {
-                                    const u32 off = this->getPixelOffset(xc, yc);
-                                    if (off != UINT32_MAX) {
-                                        Color c = color;
-                                        c.a = static_cast<u8>((base_a * static_cast<u8>(cov * 15.0f + 0.5f)) / 15);
-                                        this->setPixelBlendDst(xc, yc, c);
-                                    }
-                                }
-                            }
-                        }
+                        const s32 span_end   = std::min(x_end, clip_right);
+                        fillRowSpanNEON(fb16, rowBase, span_start, span_end, color);
+                        continue;
                     }
+
+                    // ── Corner rows ────────────────────────────────────────────────────
+                    const float dy      = (yc < corner_y_top) ? static_cast<float>(corner_y_top - yc)
+                                                               : static_cast<float>(yc - corner_y_bot);
+                    const float dy_sq   = dy * dy;
+                    if (dy_sq > aa_thresh) continue;
+
+                    const float dy_half    = dy - 0.5f;
+                    const float dy_half_sq = dy_half * dy_half;
+
+                    const s32 span_start = std::max(x,   clip_left);
+                    const s32 span_end   = std::min(x_end, clip_right);
+                    s32 xc = span_start;
+
+                    // Shared arc-pixel blender: blend one pixel at xc given its dx from arc centre.
+                    auto arcPixel = [&](s32 xc_, float dx) __attribute__((always_inline)) {
+                        const float dx_sq = dx * dx;
+                        const float d2    = dx_sq + dy_sq;
+                        const u32 off = blockLinearOffset(static_cast<u32>(xc_), rowBase);
+                        if (d2 <= r2) {
+                            blendPixelDirect(fb16, off, color, base_a);
+                        } else if (d2 <= aa_thresh) {
+                            const float dx_half    = dx - 0.5f;
+                            const float dx_half_sq = dx_half * dx_half;
+                            const u32 cov = (u32)(dx_sq      + dy_sq      <= r2)
+                                          + (u32)(dx_half_sq + dy_sq      <= r2)
+                                          + (u32)(dx_sq      + dy_half_sq <= r2)
+                                          + (u32)(dx_half_sq + dy_half_sq <= r2);
+                            if (cov)
+                                blendPixelDirect(fb16, off, color,
+                                    static_cast<u8>((base_a * cov + 2) >> 2));
+                        }
+                    };
+
+                    // Left corner arc
+                    const s32 left_end = std::min(corner_x_left + 1, span_end);
+                    for (; xc < left_end; ++xc)
+                        arcPixel(xc, static_cast<float>(corner_x_left - xc));
+
+                    // Middle section of corner row — NEON fill
+                    const s32 mid_end = std::min(corner_x_right, span_end);
+                    fillRowSpanNEON(fb16, rowBase, xc, mid_end, color);
+                    xc = mid_end;
+
+                    // Right corner arc
+                    for (; xc < span_end; ++xc)
+                        arcPixel(xc, static_cast<float>(xc - corner_x_right));
                 }
             }
 
-            // RGBA4444 processing - no expansion needed
-            const uint8x16_t mask_low = vdupq_n_u8(0x0F);
-            
-            inline void processBMPChunk(const u32 x, const u32 y, const s32 imageW, const u8 *preprocessedData, 
-                                         const s32 startRow, const s32 endRow, const u8 globalAlphaLimit,
-                                         const bool useBarrier = true) {
+            ALWAYS_INLINE static u32 blockLinearYPart(u32 y, u32 owv) noexcept {
+                return ((((y & 127u) >> 4u) + ((y >> 7u) * owv)) << 9u)
+                     + ((y & 8u) << 5u) + ((y & 6u) << 4u) + ((y & 1u) << 3u);
+            }
+
+            ALWAYS_INLINE static u32 blockLinearOffset(u32 px, u32 yPart) noexcept {
+                return yPart + ((px >> 5u) << 12u) + ((px & 16u) << 3u) + ((px & 8u) << 1u) + (px & 7u);
+            }
+
+            template<typename Fn>
+            static void dispatchRowChunks(u32 totalRows, Fn fn) {
+                const u32 n     = ult::numThreads;
+                const u32 chunk = (totalRows + n - 1u) / n;
+                u32 launched = 0u;
+                for (u32 t = 0u; t < n; ++t) {
+                    const u32 s = t * chunk;
+                    if (s >= totalRows) break;
+                    const u32 e = std::min(s + chunk, totalRows);
+                    ult::renderThreads[launched++] = std::thread([&fn, s, e]() { fn(s, e); });
+                }
+                for (u32 t = 0u; t < launched; ++t) ult::renderThreads[t].join();
+            }
+
+            inline void processBMPChunk(const u32 x, const u32 y, const s32 imageW, const u8* preprocessedData,
+                                        const s32 startRow, const s32 endRow, const u8 globalAlphaLimit,
+                                        const bool useBarrier = true, const bool preserveAlpha = false)
+            {
                 const s32 bytesPerRow = imageW * 2;
-                const s32 endX16 = imageW & ~15;
-                const uint8x16_t alpha_limit_vec = vdupq_n_u8(globalAlphaLimit);
-            
-                Color* const framebuffer = static_cast<Color*>(this->getCurrentFramebuffer());
-            
-                const bool hasScissor = !this->m_scissoringStack.empty();
-                const auto scissor = hasScissor ? this->m_scissoringStack.top() : ScissoringConfig{};
-            
+
+                void* const rawFB        = this->m_currentFramebuffer;
+                u16* const fb16          = reinterpret_cast<u16*>(rawFB);
+                Color* const framebuffer = static_cast<Color*>(rawFB);
+
+                const bool hasScissor = Renderer::get().m_scissorDepth != 0;
+                const auto scissor    = hasScissor ? Renderer::get().m_scissorStack[Renderer::get().m_scissorDepth - 1] : ScissoringConfig{};
+                const u32 owv = offsetWidthVar;
+
+                // Prologue length: pixels from x until first 8-aligned destination column.
+                // For all NEON groups, dst x is 8-aligned so 8 pixels are contiguous in fb.
+                //
+                // neonEnd must be computed relative to prologueLen, NOT simply imageW & ~7.
+                // imageW & ~7 is wrong when prologueLen > 0: the NEON groups start at
+                // prologueLen, so their endpoints are prologueLen+8, prologueLen+16, etc.
+                // Using imageW & ~7 causes the last group to either read past the end of
+                // preprocessedData (OOB) or overlap with the epilogue (double-write).
+                const s32 prologueLen = static_cast<s32>((8u - (x & 7u)) & 7u);
+                const s32 neonEnd     = (imageW > prologueLen)
+                    ? prologueLen + static_cast<s32>((static_cast<u32>(imageW - prologueLen)) & ~7u)
+                    : prologueLen;
+
                 for (s32 y1 = startRow; y1 < endRow; ++y1) {
-                    const u32 baseY = y + y1;
-            
-                    if (hasScissor && (baseY < scissor.y || baseY >= scissor.y_max))
-                        continue;
-            
-                    const u32 yPart = ((((baseY & 127) >> 4) + ((baseY >> 7) * offsetWidthVar)) << 9)
-                                    + ((baseY & 8) << 5) + ((baseY & 6) << 4) + ((baseY & 1) << 3);
-            
-                    const u8 *rowPtr = preprocessedData + (y1 * bytesPerRow);
-                    s32 x1 = 0;
-            
-                    for (; x1 < endX16; x1 += 16) {
-                        const u8* ptr = rowPtr + (x1 << 1);
-            
-                        uint8x16x2_t packed = vld2q_u8(ptr);
-                        uint8x16_t high1 = vshrq_n_u8(packed.val[0], 4);
-                        uint8x16_t low1  = vandq_u8(packed.val[0], mask_low);
-                        uint8x16_t high2 = vshrq_n_u8(packed.val[1], 4);
-                        uint8x16_t low2  = vminq_u8(vandq_u8(packed.val[1], mask_low), alpha_limit_vec);
-            
-                        alignas(16) u8 red_vals[16], green_vals[16], blue_vals[16], alpha_vals[16];
-                        vst1q_u8(red_vals,   high1);
-                        vst1q_u8(green_vals, low1);
-                        vst1q_u8(blue_vals,  high2);
-                        vst1q_u8(alpha_vals, low2);
-            
-                        const u32 baseX = x + x1;
-            
-                        for (int i = 0; i < 16; ++i) {
-                            const u8 a = alpha_vals[i];
-                            if (a == 0) continue;
-                            const u32 px = baseX + i;
-                            if (hasScissor && (px < scissor.x || px >= scissor.x_max)) continue;
-                            const u32 offset = yPart + ((px >> 5) << 12)
-                                             + ((px & 16) << 3) + ((px & 8) << 1) + (px & 7);
-                            const Color src = framebuffer[offset];
-                            framebuffer[offset] = {
-                                blendColor(src.r, red_vals[i], a),
-                                blendColor(src.g, green_vals[i], a),
-                                blendColor(src.b, blue_vals[i], a),
-                                src.a
-                            };
+                    const u32 baseY = y + static_cast<u32>(y1);
+                    if (hasScissor && (baseY < scissor.y || baseY >= scissor.y_max)) [[unlikely]] continue;
+
+                    const u32 yPart = blockLinearYPart(baseY, owv);
+                    const u8* const rowPtr = preprocessedData + (y1 * bytesPerRow);
+
+                    if (__builtin_expect(!hasScissor, 1)) {
+                        // ── Fast path: no scissor ─────────────────────────────────────────
+                        // NEON constants live here, not at function entry: the scissor path
+                        // is scalar-only and never uses them.  Hoisting them unconditionally
+                        // wasted 5 vdup instructions on every scissored row.
+                        const uint8x8_t alpha_limit_vec = vdup_n_u8(globalAlphaLimit);
+                        const uint8x8_t mask_low8 = vdup_n_u8(0x0Fu);
+                        const uint8x8_t vZero8    = vdup_n_u8(0u);
+                        const uint16x8_t vMask4   = vdupq_n_u16(0x0Fu);
+                        const uint16x8_t v15_16   = vdupq_n_u16(15u);
+
+                        // Scalar pixel writer for prologue and epilogue.
+                        auto writePixelBMP = [&](s32 x1) {
+                            const u8 p1 = rowPtr[x1 << 1], p2 = rowPtr[(x1 << 1) + 1];
+                            const u8 av = std::min<u8>(p2 & 0x0Fu, globalAlphaLimit);
+                            if (av == 0) return;
+                            const u32 off = blockLinearOffset(x + static_cast<u32>(x1), yPart);
+                            Color& dst = framebuffer[off];
+                            dst.r = blendColor(dst.r, p1 >> 4,    av);
+                            dst.g = blendColor(dst.g, p1 & 0x0Fu, av);
+                            dst.b = blendColor(dst.b, p2 >> 4,    av);
+                            if (!preserveAlpha)
+                                dst.a = static_cast<u8>(av + ((dst.a * (0xF - av)) >> 4));
+                        };
+
+                        // Scalar prologue — pixels until first 8-aligned dst column
+                        const s32 p_end = std::min(prologueLen, imageW);
+                        for (s32 x1 = 0; x1 < p_end; ++x1)
+                            writePixelBMP(x1);
+
+                        // ── NEON 8-pixel blend loop ───────────────────────────────────────
+                        // 8 consecutive pixels at an 8-aligned dst-x are contiguous in the
+                        // block-linear framebuffer, so vld1q_u16 / vst1q_u16 apply directly.
+                        for (s32 x1 = p_end; x1 < neonEnd; x1 += 8) {
+                            const uint8x8x2_t packed = vld2_u8(rowPtr + (x1 << 1));
+                            const uint8x8_t sa = vmin_u8(vand_u8(packed.val[1], mask_low8), alpha_limit_vec);
+
+                            // Skip group if all 8 pixels are transparent
+                            if (vget_lane_u64(vreinterpret_u64_u8(sa), 0) == 0u) continue;
+
+                            const u32 off = blockLinearOffset(x + static_cast<u32>(x1), yPart);
+                            const uint16x8_t dst16 = vld1q_u16(fb16 + off);
+
+                            const uint16x8_t va16  = vmovl_u8(sa);
+                            const uint16x8_t via16 = vsubq_u16(v15_16, va16);
+
+                            const uint16x8_t sr16 = vmovl_u8(vshr_n_u8(packed.val[0], 4));
+                            const uint16x8_t sg16 = vmovl_u8(vand_u8(packed.val[0], mask_low8));
+                            const uint16x8_t sb16 = vmovl_u8(vshr_n_u8(packed.val[1], 4));
+
+                            const uint16x8_t dr16 = vandq_u16(dst16, vMask4);
+                            const uint16x8_t dg16 = vandq_u16(vshrq_n_u16(dst16, 4), vMask4);
+                            const uint16x8_t db16 = vandq_u16(vshrq_n_u16(dst16, 8), vMask4);
+                            const uint16x8_t da16 = vshrq_n_u16(dst16, 12);
+
+                            const uint16x8_t r_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(dr16, via16), sr16, va16), 4);
+                            const uint16x8_t g_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(dg16, via16), sg16, va16), 4);
+                            const uint16x8_t b_out = vshrq_n_u16(vmlaq_u16(vmulq_u16(db16, via16), sb16, va16), 4);
+                            const uint16x8_t a_out = preserveAlpha
+                                ? da16
+                                : vaddq_u16(va16, vshrq_n_u16(vmulq_u16(da16, via16), 4));
+
+                            uint16x8_t result = vorrq_u16(r_out,
+                                vorrq_u16(vshlq_n_u16(g_out, 4),
+                                vorrq_u16(vshlq_n_u16(b_out, 8),
+                                          vshlq_n_u16(a_out, 12))));
+
+                            // Preserve original dst for fully-transparent pixels
+                            const uint16x8_t zeroMask = vreinterpretq_u16_s16(
+                                vmovl_s8(vreinterpret_s8_u8(vceq_u8(sa, vZero8))));
+                            result = vbslq_u16(zeroMask, dst16, result);
+
+                            vst1q_u16(fb16 + off, result);
+                        }
+
+                        // Scalar epilogue — remaining pixels after last full NEON group
+                        for (s32 x1 = neonEnd; x1 < imageW; ++x1)
+                            writePixelBMP(x1);
+                    } else {
+                        // ── Scissor path: scalar only ─────────────────────────────────────
+                        // Same pixel writer — the only addition is the x-range guard.
+                        auto writePixelBMP = [&](s32 x1) {
+                            const u8 p1 = rowPtr[x1 << 1], p2 = rowPtr[(x1 << 1) + 1];
+                            const u8 av = std::min<u8>(p2 & 0x0Fu, globalAlphaLimit);
+                            if (av == 0) return;
+                            const u32 off = blockLinearOffset(x + static_cast<u32>(x1), yPart);
+                            Color& dst = framebuffer[off];
+                            dst.r = blendColor(dst.r, p1 >> 4,    av);
+                            dst.g = blendColor(dst.g, p1 & 0x0Fu, av);
+                            dst.b = blendColor(dst.b, p2 >> 4,    av);
+                            if (!preserveAlpha)
+                                dst.a = static_cast<u8>(av + ((dst.a * (0xF - av)) >> 4));
+                        };
+                        for (s32 x1 = 0; x1 < imageW; ++x1) {
+                            const u32 px = x + static_cast<u32>(x1);
+                            if (px < scissor.x || px >= scissor.x_max) continue;
+                            writePixelBMP(x1);
                         }
                     }
-            
-                    for (; x1 < imageW; ++x1) {
-                        const u8 p1 = rowPtr[x1 << 1];
-                        const u8 p2 = rowPtr[(x1 << 1) + 1];
-                        const u8 alpha = std::min(static_cast<u8>(p2 & 0x0F), globalAlphaLimit);
-                        if (alpha == 0) continue;
-                        const u32 px = x + x1;
-                        if (hasScissor && (px < scissor.x || px >= scissor.x_max)) continue;
-                        const u32 offset = yPart + ((px >> 5) << 12)
-                                         + ((px & 16) << 3) + ((px & 8) << 1) + (px & 7);
-                        const Color bg = framebuffer[offset];
-                        framebuffer[offset] = {
-                            blendColor(bg.r, static_cast<u8>(p1 >> 4), alpha),
-                            blendColor(bg.g, static_cast<u8>(p1 & 0x0F), alpha),
-                            blendColor(bg.b, static_cast<u8>(p2 >> 4), alpha),
-                            bg.a
-                        };
-                    }
                 }
-            
-                if (useBarrier)
-                    ult::inPlotBarrier.arrive_and_wait();
+
+                if (useBarrier) ult::inPlotBarrier.arrive_and_wait();
             }
             
-            inline void drawBitmapRGBA4444(const u32 x, const u32 y, const u32 imageW, const u32 imageH, 
-                                            const u8 *preprocessedData, float opacity = 1.0f) {
+            // --- Draw bitmap RGBA4444 ---
+            inline void drawBitmapRGBA4444(const u32 x, const u32 y, const u32 imageW, const u32 imageH,
+                                           const u8* preprocessedData, float opacity = 1.0f, bool preserveAlpha = false)
+            {
                 const u8 globalAlphaLimit = static_cast<u8>(0xF * opacity);
-                
-                if (imageW < 448) {
-                    processBMPChunk(x, y, imageW, preprocessedData, 0, imageH, globalAlphaLimit, false);
+
+                // Narrow images: single-threaded to avoid thread-spawn overhead.
+                if (imageW < 448u) {
+                    processBMPChunk(x, y, imageW, preprocessedData, 0, imageH, globalAlphaLimit, false, preserveAlpha);
                     return;
                 }
-                
-                
-                for (unsigned i = 0; i < ult::numThreads; ++i) {
-                    const u32 startRow = i * ult::bmpChunkSize;
-                    const u32 endRow = std::min(startRow + ult::bmpChunkSize, imageH);
-                    ult::renderThreads[i] = std::thread([this, x, y, imageW, preprocessedData, startRow, endRow, globalAlphaLimit](){
-                        processBMPChunk(x, y, imageW, preprocessedData, startRow, endRow, globalAlphaLimit, true);
+
+                dispatchRowChunks(imageH, [=, this](u32 s, u32 e) {
+                    processBMPChunk(x, y, imageW, preprocessedData, s, e, globalAlphaLimit, true, preserveAlpha);
+                });
+            }
+            
+
+            template<bool kDark>
+            ALWAYS_INLINE static void drawWallpaperRows(
+                const u32 rowStart,
+                const u32 rowEnd,
+                tsl::Color* const framebuffer,
+                const u8* const src_base,
+                const u32* const s_yParts,
+                const u32* const s_xGroupParts,
+                const u8 globalAlphaLimit,
+                const u8 bg_r,
+                const u8 bg_g,
+                const u8 bg_b,
+                const u8 bg_a)
+            {
+                static constexpr u32 kW  = 448u;
+                static constexpr u32 kGW = kW / 8u; // 56 groups
+            
+                // ── NEON constants — hoisted once per worker ─────────────────────────────
+                const uint8x8_t  v_mask4     = vdup_n_u8(0x0Fu);
+                const uint8x8_t  v_alpha_lim = vdup_n_u8(globalAlphaLimit);
+                const uint8x8_t  v_bg_a4     = vdup_n_u8(static_cast<u8>(bg_a << 4));
+            
+                // Only used in !kDark path; compiler should dead-strip in kDark=true instantiation.
+                const uint8x8_t  v15         = vdup_n_u8(15u);
+                const uint16x8_t v_bg_r16    = vdupq_n_u16(bg_r);
+                const uint16x8_t v_bg_g16    = vdupq_n_u16(bg_g);
+                const uint16x8_t v_bg_b16    = vdupq_n_u16(bg_b);
+            
+                const auto do_pair = [&](const u32 base, const u8* rs, const u32 g) {
+                    const uint8x16x2_t raw = vld2q_u8(rs + (g << 4u));
+            
+                    // Low half = group g
+                    const uint8x8_t sr0 = vshr_n_u8(vget_low_u8(raw.val[0]), 4);
+                    const uint8x8_t sg0 = vand_u8   (vget_low_u8(raw.val[0]), v_mask4);
+                    const uint8x8_t sb0 = vshr_n_u8(vget_low_u8(raw.val[1]), 4);
+                    const uint8x8_t sa0 = vmin_u8(vand_u8(vget_low_u8(raw.val[1]), v_mask4), v_alpha_lim);
+            
+                    // High half = group g+1
+                    const uint8x8_t sr1 = vshr_n_u8(vget_high_u8(raw.val[0]), 4);
+                    const uint8x8_t sg1 = vand_u8   (vget_high_u8(raw.val[0]), v_mask4);
+                    const uint8x8_t sb1 = vshr_n_u8(vget_high_u8(raw.val[1]), 4);
+                    const uint8x8_t sa1 = vmin_u8(vand_u8(vget_high_u8(raw.val[1]), v_mask4), v_alpha_lim);
+            
+                    uint8x8_t or0, og0, ob0, or1, og1, ob1;
+            
+                    if constexpr (kDark) {
+                        or0 = vshrn_n_u16(vmull_u8(sr0, sa0), 4);
+                        og0 = vshrn_n_u16(vmull_u8(sg0, sa0), 4);
+                        ob0 = vshrn_n_u16(vmull_u8(sb0, sa0), 4);
+            
+                        or1 = vshrn_n_u16(vmull_u8(sr1, sa1), 4);
+                        og1 = vshrn_n_u16(vmull_u8(sg1, sa1), 4);
+                        ob1 = vshrn_n_u16(vmull_u8(sb1, sa1), 4);
+                    } else {
+                        const uint16x8_t ia0 = vmovl_u8(vsub_u8(v15, sa0));
+                        or0 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia0, v_bg_r16), vmull_u8(sr0, sa0)), 4);
+                        og0 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia0, v_bg_g16), vmull_u8(sg0, sa0)), 4);
+                        ob0 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia0, v_bg_b16), vmull_u8(sb0, sa0)), 4);
+            
+                        const uint16x8_t ia1 = vmovl_u8(vsub_u8(v15, sa1));
+                        or1 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia1, v_bg_r16), vmull_u8(sr1, sa1)), 4);
+                        og1 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia1, v_bg_g16), vmull_u8(sg1, sa1)), 4);
+                        ob1 = vshrn_n_u16(vaddq_u16(vmulq_u16(ia1, v_bg_b16), vmull_u8(sb1, sa1)), 4);
+                    }
+            
+                    vst2_u8(reinterpret_cast<u8*>(framebuffer + base),
+                            uint8x8x2_t{{vorr_u8(vshl_n_u8(og0, 4), or0), vorr_u8(v_bg_a4, ob0)}});
+                    vst2_u8(reinterpret_cast<u8*>(framebuffer + base + 16),
+                            uint8x8x2_t{{vorr_u8(vshl_n_u8(og1, 4), or1), vorr_u8(v_bg_a4, ob1)}});
+                };
+            
+                for (u32 y = rowStart; y < rowEnd; ++y) {
+                    const u32       yPart = s_yParts[y];
+                    const u8* const rs    = src_base + y * (kW * 2u);
+            
+                    for (u32 g = 0u; g < kGW; g += 2u)
+                        do_pair(yPart + s_xGroupParts[g], rs, g);
+                }
+            }
+
+            // --- Draw wallpaper ---
+            // =============================================================================
+            // draw_wallpaper_direct
+            //
+            // Full-frame specialised replacement for renderer->drawWallpaper().
+            //
+            // Fixed contract:
+            //   • always 448×720 full-screen (correctFrameSize guaranteed)
+            //   • always opacity 1.0 in normal operation
+            //   • always preserveAlpha == true
+            //   • always called immediately after fillScreen (no scissoring active)
+            //
+            // Improvements over the generic processBMPChunk path:
+            //
+            //  1. Static precomputed offset tables (yParts[720] + xGroupParts[56]).
+            //     Generic code recomputes / re-allocates setup data every call.
+            //     Here those values are computed once (≈ 3 KB static) and reused forever.
+            //
+            //  2. NEON 8-pixel contiguous stores.
+            //     The block-linear swizzle maps each run of 8 consecutive pixels to 8
+            //     consecutive framebuffer slots.  We exploit that directly with vld2_u8 /
+            //     vst2_u8 instead of generic scalar scatter logic.
+            //
+            //  3. Background color read once, not per pixel.
+            //     fillScreen writes one constant Color to every slot, so dst.a (preserved
+            //     by preserveAlpha==true) is the same everywhere.  Read framebuffer[0]
+            //     once and broadcast into NEON lanes.
+            //
+            //  4. No scissoring checks anywhere in the hot loop.
+            //
+            // Threading: identical to drawBitmapRGBA4444 — ult::numThreads threads,
+            // each processing a row chunk and then joining.
+            // =============================================================================
+            inline void drawWallpaper() {
+                // ── Same entry guards as Renderer::drawWallpaper() ──────────────────────
+                if (ult::limitedMemory || ult::refreshWallpaper.load(std::memory_order_acquire)) return;
+            
+                ult::inPlot.store(true, std::memory_order_release);
+            
+                if (!ult::wallpaperData.empty() &&
+                    !ult::refreshWallpaper.load(std::memory_order_acquire) &&
+                    ult::correctFrameSize)
+                {
+                    // ── Static precomputed offset tables ─────────────────────────────────
+                    // yParts[y]       : y-contribution to the block-linear framebuffer offset.
+                    // xGroupParts[g]  : x-contribution for the start of 8-pixel group g
+                    //                   (g = 0..55; 56 groups × 8 pixels = 448 px/row).
+                    //
+                    // Pure functions of the fixed 448×720 / offsetWidthVar=112 geometry.
+                    // Initialised on the first call; never reallocated.
+                    // Total static storage: 720×4 + 56×4 = 3,104 bytes.
+                    static constexpr u32 kW  = 448u;
+                    static constexpr u32 kH  = 720u;
+                    static constexpr u32 kGW = kW / 8u;  // 56 groups of 8 pixels per row
+            
+                    static u32  s_yParts[kH];
+                    static u32  s_xGroupParts[kGW];
+                    static bool s_tables_ready = false;
+            
+                    if (__builtin_expect(!s_tables_ready, 0)) {
+                        const u32 owv = offsetWidthVar;
+                        for (u32 yi = 0u; yi < kH; ++yi)
+                            s_yParts[yi] = blockLinearYPart(yi, owv);
+                        for (u32 g = 0u; g < kGW; ++g) {
+                            const u32 x = g * 8u;
+                            s_xGroupParts[g] = ((x >> 5u) << 12u) + ((x & 16u) << 3u) + ((x & 8u) << 1u);
+                        }
+                        s_tables_ready = true;
+                    }
+            
+                    tsl::Color* const framebuffer =
+                        static_cast<tsl::Color*>(this->m_currentFramebuffer);
+
+                    // ── Background color — always black RGB, alpha from theme ────────────
+                    // The wallpaper is always composited over a black background.
+                    // bg RGB is hardcoded 0 so the compiler always selects the kDark=true
+                    // template instantiation, which eliminates the three background-channel
+                    // multiply-add pairs (vmulq_u16 × 3 + vaddq_u16 × 3) from the inner loop.
+                    //
+                    // bg_a mirrors all three branches of a(defaultBackgroundColor).a exactly:
+                    //   disableTransparency + useOpaqueScreenshots → 0xF (fully opaque)
+                    //   disableTransparency only                   → max(c.a, 0xE)
+                    //   normal fade                                → min(c.a, opacity_limit)
+                    //
+                    // globalAlphaLimit caps the wallpaper source pixel alphas and is always
+                    // 0xF * s_opacity — unaffected by disableTransparency (same as
+                    // drawBitmapRGBA4444).
+                    //
+                    // For fully-transparent wallpaper pixels (src_a == 0) the kDark path
+                    // emits {r=0, g=0, b=0, a=bg_a} — identical to what fillScreen wrote —
+                    // so no pixel is left uninitialised and callers can skip fillScreen entirely.
+                    const u8 globalAlphaLimit =
+                        static_cast<u8>(0xF * Renderer::s_opacity);
+                    const u8 bg_a = ult::disableTransparency
+                        ? (ult::useOpaqueScreenshots
+                               ? 0xFu
+                               : (tsl::defaultBackgroundColor.a > 0xEu
+                                      ? tsl::defaultBackgroundColor.a
+                                      : 0xEu))
+                        : (tsl::defaultBackgroundColor.a < globalAlphaLimit
+                               ? tsl::defaultBackgroundColor.a
+                               : globalAlphaLimit);
+            
+                    const u8* const src_base = ult::wallpaperData.data();
+            
+                    // bg is always black — always use the kDark=true fast path.
+                    dispatchRowChunks(kH, [=](u32 rowStart, u32 rowEnd) {
+                        drawWallpaperRows<true>(
+                            rowStart, rowEnd,
+                            framebuffer,
+                            src_base,
+                            s_yParts,
+                            s_xGroupParts,
+                            globalAlphaLimit,
+                            0u, 0u, 0u, bg_a
+                        );
                     });
                 }
-                for (auto& t : ult::renderThreads) t.join();
-            }
             
-            inline void drawWallpaper() {
-                if (!ult::expandedMemory || ult::refreshWallpaper.load(std::memory_order_acquire)) {
-                    return;
-                }
-                
-                ult::inPlot.store(true, std::memory_order_release);
-                
-                if (!ult::wallpaperData.empty() && 
-                    !ult::refreshWallpaper.load(std::memory_order_acquire) && 
-                    ult::correctFrameSize) {
-                    drawBitmapRGBA4444(0, 0, cfg::FramebufferWidth, cfg::FramebufferHeight, 
-                                      ult::wallpaperData.data(), Renderer::s_opacity);
-                }
-                
                 ult::inPlot.store(false, std::memory_order_release);
             }
-
 
             /**
              * @brief Draws a RGBA8888 bitmap from memory
@@ -2320,104 +2655,20 @@ namespace tsl {
                 // Pre-compute alpha limit once using global opacity
                 const u8 alphaLimit = static_cast<u8>(0xF * Renderer::s_opacity);
                 
-                // Completely unroll small bitmaps for maximum speed
+                // Small-bitmap fast path (icons ≤ 8×8).
+                // Simple loop compiles to a single copy of the pixel body at -Os,
+                // identical in speed for counts ≤ 8 and far smaller in the binary
+                // than the previous Duff's-device unroll (which generated 8 copies).
                 if (w <= 8 && h <= 8) [[likely]] {
-                    s32 px;
-                    // Specialized path for small bitmaps (icons, etc.)
                     for (s32 py = 0; py < h; ++py) {
                         const s32 rowY = y + py;
-                        px = x;
-                        
-                        // Unroll inner loop completely for small widths
-                        switch(w) {
-                            case 8: goto pixel8;
-                            case 7: goto pixel7;
-                            case 6: goto pixel6;
-                            case 5: goto pixel5;
-                            case 4: goto pixel4;
-                            case 3: goto pixel3;
-                            case 2: goto pixel2;
-                            case 1: goto pixel1;
-                            default: break;
-                        }
-                        
-                        pixel8: {
+                        for (s32 xi = 0; xi < w; ++xi) {
                             u8 alpha = src[3] >> 4;
                             if (alpha > 0) {
                                 alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
+                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4),
                                                static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel7: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel6: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel5: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel4: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel3: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel2: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
-                            }
-                            px++; src += 4;
-                        }
-                        pixel1: {
-                            u8 alpha = src[3] >> 4;
-                            if (alpha > 0) {
-                                alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                                const Color c = {static_cast<u8>(src[0] >> 4), static_cast<u8>(src[1] >> 4), 
-                                               static_cast<u8>(src[2] >> 4), alpha};
-                                setPixelBlendSrc(px, rowY, a(c));
+                                setPixelBlendSrc(x + xi, rowY, a(c));
                             }
                             src += 4;
                         }
@@ -2436,8 +2687,9 @@ namespace tsl {
                     
                     // Process all pixels in the row
                     while (src < rowEnd) {
-                        // Prefetch ahead every 16 pixels (64 bytes)
-                        if (((uintptr_t)src & 63) == 0) [[unlikely]] {
+                        // Prefetch next cache line when src crosses a 64-byte boundary.
+                        // Fires every 16 pixels — regular and predictable, so no [[unlikely]].
+                        if (((uintptr_t)src & 63) == 0) {
                             __builtin_prefetch(src + 64, 0, 3);
                         }
                         
@@ -2460,7 +2712,17 @@ namespace tsl {
              * @param color Color
              */
             inline void fillScreen(const Color& color) {
-                std::fill_n(static_cast<Color*>(this->getCurrentFramebuffer()), this->getFramebufferSize() / sizeof(Color), color);
+                // std::fill_n at -Os compiles to a scalar loop (auto-vectorisation is
+                // disabled at -Os).  An explicit NEON loop processes 8 u16 pixels per
+                // iteration — same loop-body instruction count, 8× fewer iterations.
+                // For the normal 448×720 framebuffer (322,560 pixels ÷ 8 = 40,320 groups)
+                // the epilogue is dead code; kept for safety on other frame sizes.
+                u16* const fb  = reinterpret_cast<u16*>(this->m_currentFramebuffer);
+                const size_t n = this->m_framebuffer.fb_size >> 1u; // byte count → u16 count
+                const uint16x8_t vc = vdupq_n_u16(color.rgba);
+                size_t i = 0;
+                for (; i + 8u <= n; i += 8u) vst1q_u16(fb + i, vc);
+                for (; i < n; ++i)            fb[i] = color.rgba;
             }
             
             /**
@@ -2556,7 +2818,8 @@ namespace tsl {
                             continue;
                         }
                         
-                        // Get glyph
+                        // Get glyph — hold shared_ptr to keep the glyph alive,
+                        // but pass raw ptr to skip atomic ref-count overhead.
                         std::shared_ptr<FontManager::Glyph> glyph = useNotificationCache ?
                             FontManager::getOrCreateNotificationGlyph(currCharacter, monospace, fontSize) :
                             FontManager::getOrCreateGlyph(currCharacter, monospace, fontSize);
@@ -2567,7 +2830,7 @@ namespace tsl {
                         
                         // Render if needed
                         if (draw && glyph->glyphBmp && currCharacter > 32) {
-                            renderGlyph(glyph, currX, currY, *currentColor, useNotificationCache);
+                            renderGlyph(glyph.get(), currX, currY, *currentColor, useNotificationCache);
                         }
                         
                         currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
@@ -2606,7 +2869,7 @@ namespace tsl {
                                                 maxY = std::max(maxY, currY + lineHeight);
                                                 
                                                 if (draw && glyph->glyphBmp && symChar > 32) {
-                                                    renderGlyph(glyph, currX, currY, *highlightColor, useNotificationCache);
+                                                    renderGlyph(glyph.get(), currX, currY, *highlightColor, useNotificationCache);
                                                 }
                                                 currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
                                             }
@@ -2666,7 +2929,7 @@ namespace tsl {
                         
                         // Render if needed
                         if (draw && glyph->glyphBmp && currCharacter > 32) {
-                            renderGlyph(glyph, currX, currY, *currentColor, useNotificationCache);
+                            renderGlyph(glyph.get(), currX, currY, *currentColor, useNotificationCache);
                         }
                         
                         currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
@@ -2808,7 +3071,12 @@ namespace tsl {
             }
 
             inline void setLayerPos(u32 x, u32 y) {
-                if (x > cfg::ScreenWidth - (int)(1.5 * cfg::FramebufferWidth) || y > cfg::ScreenHeight - (int)(1.5 * cfg::FramebufferHeight)) {
+                // Guard against placing the layer off-screen.
+                // Use cfg::LayerWidth/Height (the actual VI layer dimensions) rather than
+                // a hardcoded 1.5× factor so this works correctly in both 720p-scaled and
+                // 1080p pixel-perfect windowed modes.
+                if (x > cfg::ScreenWidth  - cfg::LayerWidth ||
+                    y > cfg::ScreenHeight - cfg::LayerHeight) {
                     return;
                 }
                 setLayerPosImpl(x, y);
@@ -2818,14 +3086,31 @@ namespace tsl {
                 const auto [horizontalUnderscanPixels, verticalUnderscanPixels] = getUnderscanPixels();
                 
                 // Recalculate layer dimensions with new underscan values
-                cfg::LayerWidth  = cfg::ScreenWidth * (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth));
-                cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / float(cfg::LayerMaxHeight));
+                //cfg::LayerWidth  = cfg::ScreenWidth * (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth));
+                //cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / float(cfg::LayerMaxHeight));
+
+                {
+                    const float divW = ult::windowedLayerPixelPerfect ? float(cfg::ScreenWidth)  : float(cfg::LayerMaxWidth);
+                    const float divH = ult::windowedLayerPixelPerfect ? float(cfg::ScreenHeight) : float(cfg::LayerMaxHeight);
+                    cfg::LayerWidth  = cfg::ScreenWidth  * (float(cfg::FramebufferWidth)  / divW);
+                    cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / divH);
+                }
                 
-                // Apply underscan adjustments
-                if (ult::DefaultFramebufferWidth == 1280 && ult::DefaultFramebufferHeight == 28) {
-                    cfg::LayerHeight += cfg::ScreenHeight/720. * verticalUnderscanPixels;
-                } else if (ult::correctFrameSize) {
-                    cfg::LayerWidth += horizontalUnderscanPixels;
+                // Apply underscan adjustments.
+                // Skipped in 1080p pixel-perfect mode to keep layer == framebuffer exactly.
+                if (!ult::windowedLayerPixelPerfect) {
+                    if (ult::DefaultFramebufferWidth == 1280 && ult::DefaultFramebufferHeight == 28) {
+                        cfg::LayerHeight += cfg::ScreenHeight/720. * verticalUnderscanPixels;
+                    } else if (ult::correctFrameSize) {
+                        cfg::LayerWidth += horizontalUnderscanPixels;
+                    } else if (horizontalUnderscanPixels > 0) {
+                        // General case: any non-standard FB size (e.g. windowed GB).
+                        // Scale the correction proportionally to the fraction of the
+                        // full 1280-logical-space width this layer occupies.
+                        cfg::LayerWidth += static_cast<int>(
+                            horizontalUnderscanPixels *
+                            (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth)) + 0.5f);
+                    }
                 }
                 
                 // Update position if using right alignment
@@ -3061,39 +3346,185 @@ namespace tsl {
         #endif
             
             // Optimized glyph rendering
-            inline void renderGlyph(std::shared_ptr<FontManager::Glyph> glyph, float x, float y, const Color& color, bool skipAlphaLimit = false) {
+            // -----------------------------------------------------------------------
+            // NEON-vectorised glyph renderer. Scalar prologue/epilogue + 8-wide NEON
+            // blend loop with fast paths for all-transparent and all-opaque runs.
+            inline void renderGlyph(const FontManager::Glyph* glyph,
+                                    float x, float y,
+                                    const Color& color,
+                                    bool skipAlphaLimit = false) {
+
                 if (!glyph->glyphBmp || color.a == 0) [[unlikely]] return;
-                
-                const s32 xPos = static_cast<s32>(x + glyph->bounds[0]);
-                const s32 yPos = static_cast<s32>(y + glyph->bounds[1]);
-                
-                if (xPos >= cfg::FramebufferWidth || yPos >= cfg::FramebufferHeight ||
-                    xPos + glyph->width <= 0 || yPos + glyph->height <= 0) [[unlikely]] return;
-                
-                const s32 startX = std::max(0, -xPos);
-                const s32 startY = std::max(0, -yPos);
-                const s32 endX = std::min(glyph->width, static_cast<s32>(cfg::FramebufferWidth) - xPos);
-                const s32 endY = std::min(glyph->height, static_cast<s32>(cfg::FramebufferHeight) - yPos);
-                const u8 alphaLimit = skipAlphaLimit ? color.a : static_cast<u8>(0xF * Renderer::s_opacity);
-                const uint8_t* bmpPtr = glyph->glyphBmp + startY * glyph->width;
-                
-                for (s32 bmpY = startY; bmpY < endY; ++bmpY, bmpPtr += glyph->width) {
-                    const s32 pixelY = yPos + bmpY;
-                    
-                    for (s32 bmpX = startX; bmpX < endX; ++bmpX) {
-                        u8 alpha = bmpPtr[bmpX] >> 4;
-                        if (alpha == 0) [[unlikely]] continue;
-                        
-                        alpha = (alpha < alphaLimit) ? alpha : alphaLimit;
-                        const s32 pixelX = xPos + bmpX;
-                        
-                        if (alpha == 0xF) [[likely]] {
-                            this->setPixel(pixelX, pixelY, color);
-                        } else {
-                            this->setPixelBlendDst(pixelX, pixelY, Color(color.r, color.g, color.b, alpha));
-                        }
-                    }
+
+                const s32 xPos = static_cast<s32>(x) + glyph->bounds[0];
+                const s32 yPos = static_cast<s32>(y) + glyph->bounds[1];
+                const s32 glyphWidth  = glyph->width;
+                const s32 glyphHeight = glyph->height;
+
+                if (xPos >= static_cast<s32>(cfg::FramebufferWidth)  ||
+                    yPos >= static_cast<s32>(cfg::FramebufferHeight)  ||
+                    xPos + glyphWidth  <= 0 ||
+                    yPos + glyphHeight <= 0) [[unlikely]] return;
+
+                s32 startX = std::max(0, -xPos);
+                s32 startY = std::max(0, -yPos);
+                s32 endX   = std::min(glyphWidth,  static_cast<s32>(cfg::FramebufferWidth)  - xPos);
+                s32 endY   = std::min(glyphHeight, static_cast<s32>(cfg::FramebufferHeight) - yPos);
+
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& sc = this->m_scissorStack[this->m_scissorDepth - 1];
+                    startX = std::max(startX, static_cast<s32>(sc.x)     - xPos);
+                    startY = std::max(startY, static_cast<s32>(sc.y)     - yPos);
+                    endX   = std::min(endX,   static_cast<s32>(sc.x_max) - xPos);
+                    endY   = std::min(endY,   static_cast<s32>(sc.y_max) - yPos);
+                    if (endX <= startX || endY <= startY) return;
                 }
+
+                const s32 spanW      = endX - startX;
+                const u8  alphaLimit = skipAlphaLimit ? color.a
+                                                      : static_cast<u8>(0xF * Renderer::s_opacity);
+
+                u16* const fb16 = reinterpret_cast<u16*>(static_cast<Color*>(this->m_currentFramebuffer));
+
+                constexpr s32 kMaxSpan = 128;
+                u32 colOff[kMaxSpan];
+                const s32  safeSpan   = std::min(spanW, kMaxSpan);
+                const u32  basePixelX = static_cast<u32>(xPos + startX);
+                for (s32 i = 0; i < safeSpan; ++i) {
+                    const u32 px = basePixelX + static_cast<u32>(i);
+                    colOff[i] = ((px >> 5u) << 12u) | ((px & 16u) << 3u)
+                              | ((px & 8u)  <<  1u) |  (px & 7u);
+                }
+
+                const uint8x8_t  vLimitU8  = vdup_n_u8(alphaLimit);
+                const uint8x8_t  vZeroU8   = vdup_n_u8(0u);
+                const uint8x8_t  vFullU8   = vdup_n_u8(0xFu);
+                const uint16x8_t vColorFull = vdupq_n_u16(color.rgba);   // 8 × full colour
+                const uint16x8_t vMask4    = vdupq_n_u16(0x000Fu);       // low-nibble mask
+                const uint16x8_t v15       = vdupq_n_u16(15u);
+                const uint16x8_t vDstR     = vdupq_n_u16(color.r);       // constant glyph R
+                const uint16x8_t vDstG     = vdupq_n_u16(color.g);       // constant glyph G
+                const uint16x8_t vDstB     = vdupq_n_u16(color.b);       // constant glyph B
+
+                const s32 prologueLen = static_cast<s32>((8u - (basePixelX & 7u)) & 7u);
+
+                const uint8_t* bmpRow = glyph->glyphBmp + startY * glyphWidth + startX;
+
+                for (s32 bmpY = startY; bmpY < endY; ++bmpY, bmpRow += glyphWidth) {
+
+                    // rowBase(y) — computed once per scanline, never per pixel.
+                    const u32 py = static_cast<u32>(yPos + bmpY);
+                    const u32 rowBase =
+                        ((((py & 127u) >> 4u) + ((py >> 7u) * offsetWidthVar)) << 9u)
+                        | ((py & 8u) << 5u) | ((py & 6u) << 4u) | ((py & 1u) << 3u);
+
+                    s32 i = 0;
+
+                    // ── Scalar pixel blender (prologue + epilogue share this) ───────
+                    auto blendScalar = [&](s32 lim) __attribute__((always_inline)) {
+                        for (; i < lim; ++i) {
+                            u8 alpha = bmpRow[i] >> 4u;
+                            if (alpha == 0u) [[unlikely]] continue;
+                            if (alpha > alphaLimit) alpha = alphaLimit;
+                            const u32 off = rowBase + colOff[i];
+                            if (alpha == 0xFu) [[likely]] {
+                                fb16[off] = color.rgba;
+                            } else {
+                                const Color src = reinterpret_cast<const Color*>(fb16)[off];
+                                reinterpret_cast<Color*>(fb16)[off] = Color(
+                                    blendColor(src.r, color.r, alpha),
+                                    blendColor(src.g, color.g, alpha),
+                                    blendColor(src.b, color.b, alpha),
+                                    alpha + static_cast<u8>((src.a * (0xFu - alpha)) >> 4u));
+                            }
+                        }
+                    };
+                    blendScalar(std::min(prologueLen, safeSpan));  // prologue
+
+                    // ── NEON main loop — 8 pixels per iteration ────────────────────
+                    while (i + 8 <= safeSpan) {
+
+                        // Load 8 bitmap bytes and extract 4-bit alphas (0..15).
+                        uint8x8_t bmp8   = vld1_u8(bmpRow + i);
+                        uint8x8_t alpha8 = vshr_n_u8(bmp8, 4);
+                        alpha8            = vmin_u8(alpha8, vLimitU8);  // clamp to alphaLimit
+
+                        // ── Fast path A: all 8 pixels transparent ──────────────────
+                        // Reinterpret the 8-byte alpha register as a u64 and compare
+                        // to zero — no horizontal-min instruction needed.
+                        if (vget_lane_u64(vreinterpret_u64_u8(alpha8), 0) == 0u) {
+                            i += 8; continue;
+                        }
+
+                        // ── Fast path B: all 8 pixels fully opaque ─────────────────
+                        // vceq_u8 produces 0xFF per lane where alpha==0xF.  If all 8
+                        // lanes are 0xFF the u64 view is all-ones.  No fb read needed.
+                        const uint8x8_t eqFull = vceq_u8(alpha8, vFullU8);
+                        if (vget_lane_u64(vreinterpret_u64_u8(eqFull), 0)
+                                == 0xFFFFFFFFFFFFFFFFull) {
+                            vst1q_u16(fb16 + rowBase + colOff[i], vColorFull);
+                            i += 8; continue;
+                        }
+
+                        // ── Mixed path: partial alpha, full NEON blend ─────────────
+                        //
+                        // Load 8 existing framebuffer colors (contiguous u16 block).
+                        uint16x8_t src16 = vld1q_u16(fb16 + rowBase + colOff[i]);
+
+                        // Expand alpha / inv-alpha to u16 for multiply.
+                        const uint16x8_t alpha16 = vmovl_u8(alpha8);
+                        const uint16x8_t inva16  = vsubq_u16(v15, alpha16); // 15 - alpha
+
+                        // Unpack src channels from packed RGBA4444.
+                        const uint16x8_t src_r = vandq_u16(src16, vMask4);
+                        const uint16x8_t src_g = vandq_u16(vshrq_n_u16(src16,  4), vMask4);
+                        const uint16x8_t src_b = vandq_u16(vshrq_n_u16(src16,  8), vMask4);
+                        const uint16x8_t src_a =           vshrq_n_u16(src16, 12);
+
+                        // out_ch = (src_ch*(15-α) + dst_ch*α) >> 4
+                        // vmlaq_u16: multiply-accumulate, one fewer vaddq per channel.
+                        const uint16x8_t r_out = vshrq_n_u16(
+                            vmlaq_u16(vmulq_u16(src_r, inva16), vDstR, alpha16), 4);
+                        const uint16x8_t g_out = vshrq_n_u16(
+                            vmlaq_u16(vmulq_u16(src_g, inva16), vDstG, alpha16), 4);
+                        const uint16x8_t b_out = vshrq_n_u16(
+                            vmlaq_u16(vmulq_u16(src_b, inva16), vDstB, alpha16), 4);
+                        // out_a = α + (src_a*(15-α)) >> 4
+                        const uint16x8_t a_out = vaddq_u16(alpha16,
+                            vshrq_n_u16(vmulq_u16(src_a, inva16), 4));
+
+                        // Repack to RGBA4444.
+                        uint16x8_t blended = vorrq_u16(r_out,
+                            vorrq_u16(vshlq_n_u16(g_out,  4),
+                            vorrq_u16(vshlq_n_u16(b_out,  8),
+                                      vshlq_n_u16(a_out, 12))));
+
+                        // Correction passes — sign-extend u8 mask (0xFF→0xFFFF, 0x00→0x0000)
+                        // so vbslq_u16 selects ALL 16 bits correctly, not just the low byte.
+                        //   α==0xF → must equal vColorFull exactly (not blend rounding)
+                        //   α==0   → must preserve src (not ~0.9375*src from blend)
+                        const uint16x8_t fullMask16 =
+                            vreinterpretq_u16_s16(vmovl_s8(vreinterpret_s8_u8(eqFull)));
+                        blended = vbslq_u16(fullMask16, vColorFull, blended);
+
+                        const uint16x8_t zeroMask16 =
+                            vreinterpretq_u16_s16(vmovl_s8(vreinterpret_s8_u8(vceq_u8(alpha8, vZeroU8))));
+                        blended = vbslq_u16(zeroMask16, src16, blended);
+
+                        vst1q_u16(fb16 + rowBase + colOff[i], blended);
+                        i += 8;
+                    }
+
+                    blendScalar(safeSpan);  // epilogue
+                }
+            }
+
+            // Legacy shared_ptr overload — call-sites that pass a shared_ptr directly
+            // still work; passing .get() to the raw-pointer overload is preferred.
+            inline void renderGlyph(const std::shared_ptr<FontManager::Glyph>& glyph,
+                                    float x, float y, const Color& color,
+                                    bool skipAlphaLimit = false) {
+                renderGlyph(glyph.get(), x, y, color, skipAlphaLimit);
             }
             
 
@@ -3103,6 +3534,7 @@ namespace tsl {
             inline void addScreenshotStacks(bool forceDisable = true) {
                 tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Screenshot);
                 tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_Recording);
+                tsl::hlp::viAddToLayerStack(&this->m_layer, ViLayerStack_LastFrame);
                 screenshotsAreDisabled.store(false, std::memory_order_release);
                 if (forceDisable)
                     screenshotsAreForceDisabled.store(false, std::memory_order_release);
@@ -3114,10 +3546,21 @@ namespace tsl {
             inline void removeScreenshotStacks(bool forceDisable = true) {
                 tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Screenshot);
                 tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_Recording);
+                tsl::hlp::viRemoveFromLayerStack(&this->m_layer, ViLayerStack_LastFrame);
                 screenshotsAreDisabled.store(true, std::memory_order_release);
                 if (forceDisable)
                     screenshotsAreForceDisabled.store(true, std::memory_order_release);
             }
+
+            /**
+             * @brief Get the current framebuffer address
+             *
+             * @return Framebuffer address
+             */
+            inline void* getCurrentFramebuffer() {
+                return this->m_currentFramebuffer;
+            }
+            
 
         private:
             Renderer() {}
@@ -3142,18 +3585,13 @@ namespace tsl {
             Framebuffer m_framebuffer;
             void *m_currentFramebuffer = nullptr;
             
-            std::stack<ScissoringConfig> m_scissoringStack;
+            // Inline scissor stack — replaces std::stack<std::deque> to eliminate heap
+            // allocation and pointer indirection on every drawing operation.
+            // Depth never exceeds a handful of levels in practice; 8 is a safe ceiling.
+            ScissoringConfig m_scissorStack[8];
+            s32              m_scissorDepth = 0;
             
             
-            
-            /**
-             * @brief Get the current framebuffer address
-             *
-             * @return Framebuffer address
-             */
-            inline void* getCurrentFramebuffer() {
-                return this->m_currentFramebuffer;
-            }
             
             /**
              * @brief Get the next framebuffer address
@@ -3161,7 +3599,7 @@ namespace tsl {
              * @return Next framebuffer address
              */
             inline void* getNextFramebuffer() {
-                return static_cast<u8*>(this->m_framebuffer.buf) + this->getNextFramebufferSlot() * this->getFramebufferSize();
+                return static_cast<u8*>(this->m_framebuffer.buf) + this->getNextFramebufferSlot() * this->m_framebuffer.fb_size;
             }
             
             /**
@@ -3197,7 +3635,7 @@ namespace tsl {
              * @return Next slot
              */
             inline u8 getNextFramebufferSlot() {
-                return (this->getCurrentFramebufferSlot() + 1) % this->getFramebufferCount();
+                return (this->m_window.cur_slot + 1) % this->m_framebuffer.num_fbs;
             }
             
             /**
@@ -3218,8 +3656,8 @@ namespace tsl {
 
             inline u32 __attribute__((always_inline)) getPixelOffset(const u32 x, const u32 y) {
                 // Check for scissoring boundaries
-                if (!this->m_scissoringStack.empty()) {
-                    const auto& currScissorConfig = this->m_scissoringStack.top();
+                if (this->m_scissorDepth != 0) [[unlikely]] {
+                    const auto& currScissorConfig = this->m_scissorStack[this->m_scissorDepth - 1];
                     if (x < currScissorConfig.x || y < currScissorConfig.y || 
                         x >= currScissorConfig.x_max || 
                         y >= currScissorConfig.y_max) {
@@ -3256,14 +3694,30 @@ namespace tsl {
                     ult::layerEdge = (1280-448);
                 }
 
-                cfg::LayerWidth  = cfg::ScreenWidth * (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth));
-                cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / float(cfg::LayerMaxHeight));
+                //cfg::LayerWidth  = cfg::ScreenWidth * (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth));
+                //cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / float(cfg::LayerMaxHeight));
 
-                // Apply underscanning offset
-                if (ult::DefaultFramebufferWidth == 1280 && ult::DefaultFramebufferHeight == 28) // for status monitor micro mode
-                    cfg::LayerHeight += cfg::ScreenHeight/720. *verticalUnderscanPixels;
-                else if (ult::correctFrameSize)
-                    cfg::LayerWidth += horizontalUnderscanPixels;
+                {
+                    const float divW = ult::windowedLayerPixelPerfect ? float(cfg::ScreenWidth)  : float(cfg::LayerMaxWidth);
+                    const float divH = ult::windowedLayerPixelPerfect ? float(cfg::ScreenHeight) : float(cfg::LayerMaxHeight);
+                    cfg::LayerWidth  = cfg::ScreenWidth  * (float(cfg::FramebufferWidth)  / divW);
+                    cfg::LayerHeight = cfg::ScreenHeight * (float(cfg::FramebufferHeight) / divH);
+                }
+
+                // Apply underscanning offset.
+                // Skipped entirely in 1080p pixel-perfect mode: the layer equals the
+                // framebuffer exactly (1:1), so adding underscan pixels would break that
+                // mapping and make cfg::LayerWidth/Height incorrect for bounds calculation.
+                if (!ult::windowedLayerPixelPerfect) {
+                    if (ult::DefaultFramebufferWidth == 1280 && ult::DefaultFramebufferHeight == 28) // for status monitor micro mode
+                        cfg::LayerHeight += cfg::ScreenHeight/720. *verticalUnderscanPixels;
+                    else if (ult::correctFrameSize)
+                        cfg::LayerWidth += horizontalUnderscanPixels;
+                    else if (horizontalUnderscanPixels > 0)
+                        cfg::LayerWidth += static_cast<int>(
+                            horizontalUnderscanPixels *
+                            (float(cfg::FramebufferWidth) / float(cfg::LayerMaxWidth)) + 0.5f);
+                }
                 
                 if (this->m_initialized)
                     return;
@@ -3478,11 +3932,68 @@ namespace tsl {
             return {horizontalUnderscanPixels, verticalUnderscanPixels};
         }
 
+        TESLA_OPT_SPEED_POP
     }
-    
+
+
     
     // Elements
     
+    // ── Shared frame-drawing helpers ──────────────────────────────────────────
+    // Extracted from virtual draw() overrides in OverlayFrame and
+    // HeaderOverlayFrame. Because these are virtual methods on distinct classes,
+    // LTO/ICF cannot merge their bodies even when the logic is identical — the
+    // compiler must emit one copy per class. Free functions with [[gnu::noinline]]
+    // ensure a single copy in the binary regardless of how many classes call them.
+
+    // Conditional atomic-float store: only writes if the value changed.
+    // Replaces the updateAtomic lambda (defined fresh per draw() call in
+    // IS_LAUNCHER frame) and the manual if-check pattern in the other frames.
+    [[gnu::noinline]] inline void updateAtomicFloat(std::atomic<float>& atom, float val) {
+        if (val != atom.load(std::memory_order_acquire))
+            atom.store(val, std::memory_order_release);
+    }
+
+    // Draws the 1-px vertical edge separator on whichever side useRightAlignment
+    // selects. Appeared verbatim in 3 different frame draw() overrides.
+    [[gnu::noinline]] inline void drawEdgeSeparator(gfx::Renderer* renderer) {
+        if (!ult::useRightAlignment)
+            renderer->drawRect(447, 0, 448, 720, renderer->a(edgeSeparatorColor));
+        else
+            renderer->drawRect(0, 0, 1, 720, renderer->a(edgeSeparatorColor));
+    }
+
+    // Measures the footer button widths, updates the three shared atomics, and
+    // draws the Back/Select touch-highlight rectangles. Used by OverlayFrame and
+    // both HeaderOverlayFrame variants; the IS_LAUNCHER variant passes its own
+    // label strings so interpreter-mode text is handled at the call site.
+    //
+    // After this call the caller can read ult::backWidth / ult::halfGap for
+    // subsequent text-positioning without holding local copies.
+    //
+    // noClickableItems suppresses the Select rect (OverlayFrame behaviour);
+    // pass false when the class has no such guard (HeaderOverlayFrame).
+    [[gnu::noinline]] inline void updateFooterButtonWidths(
+            gfx::Renderer*     renderer,
+            const std::string& backLabel,
+            const std::string& selectLabel,
+            bool               noClickableItems) {
+        static constexpr float kButtonStartX = 30.0f;
+        const float gapWidth  = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
+        const float halfGap   = gapWidth * 0.5f;
+        const float backW     = renderer->getTextDimensions(backLabel,   false, 23).first + gapWidth;
+        const float selW      = renderer->getTextDimensions(selectLabel, false, 23).first + gapWidth;
+        updateAtomicFloat(ult::halfGap,    halfGap);
+        updateAtomicFloat(ult::backWidth,  backW);
+        updateAtomicFloat(ult::selectWidth, selW);
+        const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
+        if (ult::touchingBack.load(std::memory_order_acquire))
+            renderer->drawRoundedRect(kButtonStartX + 2 - halfGap, buttonY, backW - 1, 73.0f, 12.0f, renderer->a(clickColor));
+        if (ult::touchingSelect.load(std::memory_order_acquire) && !noClickableItems)
+            renderer->drawRoundedRect(kButtonStartX + 2 - halfGap + backW + 1, buttonY, selW - 2, 73.0f, 12.0f, renderer->a(clickColor));
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     namespace elm {
         
         enum class TouchEvent {
@@ -4071,7 +4582,7 @@ namespace tsl {
         };
 
 
-        #if IS_LAUNCHER_DIRECTIVE
+        //#if IS_LAUNCHER_DIRECTIVE
         // Simple utility function to draw the dynamic "Ultra" part of the logo
         static s32 drawDynamicUltraText(gfx::Renderer* renderer, s32 startX, s32 y, u32 fontSize, 
                                        const tsl::Color& staticColor, bool useNotificationMethod = false) {
@@ -4147,7 +4658,7 @@ namespace tsl {
             return totalWidth;
         }
 
-        #endif
+        //#endif
         
         /**
          * @brief The base frame which can contain another view
@@ -4223,8 +4734,11 @@ namespace tsl {
             
             void draw(gfx::Renderer *renderer) override {
             
-                renderer->fillScreen(a(defaultBackgroundColor));
-                renderer->drawWallpaper();
+                if (!ult::limitedMemory && !ult::refreshWallpaper.load(std::memory_order_acquire) &&
+                    !ult::wallpaperData.empty() && ult::correctFrameSize)
+                    renderer->drawWallpaper();
+                else
+                    renderer->fillScreen(a(defaultBackgroundColor));
                 
                 y = 50;
                 offset = 0;
@@ -4324,34 +4838,23 @@ namespace tsl {
             
                 renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(bottomSeparatorColor));
             
-                // Atomic update helper
-                const auto updateAtomic = [](std::atomic<float>& atom, float val) {
-                    if (val != atom.load(std::memory_order_acquire))
-                        atom.store(val, std::memory_order_release);
-                };
-    
-                const float gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
             #if IS_LAUNCHER_DIRECTIVE
-                const float backTextWidth   = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::BACK   : ult::HIDE),   false, 23).first;
-                const float selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::OK     : ult::CANCEL), false, 23).first;
+                updateFooterButtonWidths(renderer,
+                    "\uE0E1" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::BACK   : ult::HIDE),
+                    "\uE0E0" + ult::GAP_2 + (!interpreterIsRunningNow ? ult::OK     : ult::CANCEL),
+                    m_noClickableItems);
             #else
-                const float backTextWidth   = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
-                const float selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + ult::OK,   false, 23).first;
+                updateFooterButtonWidths(renderer,
+                    "\uE0E1" + ult::GAP_2 + ult::BACK,
+                    "\uE0E0" + ult::GAP_2 + ult::OK,
+                    m_noClickableItems);
             #endif
-                const float _halfGap    = gapWidth * 0.5f;
-                const float _backWidth  = backTextWidth  + gapWidth;
-                const float _selectWidth = selectTextWidth + gapWidth;
-                updateAtomic(ult::halfGap,    _halfGap);
-                updateAtomic(ult::backWidth,  _backWidth);
-                updateAtomic(ult::selectWidth, _selectWidth);
-                
+                const float _halfGap   = ult::halfGap.load(std::memory_order_acquire);
+                const float _backWidth = ult::backWidth.load(std::memory_order_acquire);
+                const float _selectWidth = ult::selectWidth.load(std::memory_order_acquire);
+                const float gapWidth = _halfGap * 2.0f;
                 static constexpr float buttonStartX = 30;
                 const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
-                
-                if (ult::touchingBack)
-                    renderer->drawRoundedRect(buttonStartX+2 - _halfGap, buttonY, _backWidth-1, 73.0f, 12.0f, a(clickColor));
-                if (ult::touchingSelect.load(std::memory_order_acquire) && !m_noClickableItems)
-                    renderer->drawRoundedRect(buttonStartX+2 - _halfGap + _backWidth+1, buttonY, _selectWidth-2, 73.0f, 12.0f, a(clickColor));
                 
             #if IS_LAUNCHER_DIRECTIVE
                 const bool hasNextPage = !interpreterIsRunningNow &&
@@ -4369,7 +4872,7 @@ namespace tsl {
                                                            (ult::usePageSwap ? "\uE0ED" : "\uE0EE")) +
                              ult::GAP_2 + (ult::inOverlaysPage.load(std::memory_order_acquire) ? ult::PACKAGES : ult::OVERLAYS_ABBR)) : ""),
                         false, 23).first + gapWidth;
-                    updateAtomic(ult::nextPageWidth, _nextPageWidth);
+                    updateAtomicFloat(ult::nextPageWidth, _nextPageWidth);
                     if (ult::touchingNextPage.load(std::memory_order_acquire)) {
                         float nextX = buttonStartX+2 - _halfGap + _backWidth + 1;
                         if (!m_noClickableItems) nextX += _selectWidth;
@@ -4385,7 +4888,7 @@ namespace tsl {
                         !m_pageLeftName.empty() ? ("\uE0ED" + ult::GAP_2 + m_pageLeftName)
                                                 : ("\uE0EE" + ult::GAP_2 + m_pageRightName),
                         false, 23).first + gapWidth;
-                    updateAtomic(ult::nextPageWidth, _nextPageWidth);
+                    updateAtomicFloat(ult::nextPageWidth, _nextPageWidth);
                     if (ult::touchingNextPage.load(std::memory_order_acquire)) {
                         float nextX = buttonStartX+2 - _halfGap + _backWidth + 1;
                         if (!m_noClickableItems) nextX += _selectWidth;
@@ -4423,7 +4926,7 @@ namespace tsl {
     
                 renderer->drawStringWithColoredSections(currentBottomLine, false, tsl::s_footerSpecialChars,
                                                         buttonStartX, 693, 23, bottomTextColor, buttonColor);
-                if (_hasOkBtn && !usingFocusColor) {
+                if (_hasOkBtn && !selectIsUsingFocusedColor) {
                     static const std::string okOverdraw = "\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1;
                     renderer->drawStringWithColoredSections(okOverdraw, false, tsl::s_footerSpecialChars,
                                                             buttonStartX + _backWidth, 693, 23, unfocusedColor, unfocusedColor);
@@ -4447,10 +4950,7 @@ namespace tsl {
                 if (m_contentElement != nullptr)
                     m_contentElement->frame(renderer);
             
-                if (!ult::useRightAlignment)
-                    renderer->drawRect(447, 0, 448, 720, a(edgeSeparatorColor));
-                else
-                    renderer->drawRect(0, 0, 1, 720, a(edgeSeparatorColor));
+                drawEdgeSeparator(renderer);
             }
         
             inline void layout(u16 parentX, u16 parentY, u16 parentWidth, u16 parentHeight) override {
@@ -4686,9 +5186,13 @@ namespace tsl {
                 
                 
                 if (FullMode == true) {
-                    renderer->fillScreen(a(defaultBackgroundColor));
-                    if (lastMode.empty() || (lastMode.compare("returning") == 0))
-                        renderer->drawWallpaper();
+                    if ((lastMode.empty() || (lastMode.compare("returning") == 0)) &&
+                        !ult::limitedMemory && !ult::refreshWallpaper.load(std::memory_order_acquire) &&
+                        !ult::wallpaperData.empty() && ult::correctFrameSize)
+                        renderer->drawWallpaper();   // bakes bg color — no fillScreen needed
+                    else {
+                        renderer->fillScreen(a(defaultBackgroundColor));
+                    }
                 } else {
                     renderer->fillScreen({ 0x0, 0x0, 0x0, 0x0});
                 }
@@ -4709,38 +5213,11 @@ namespace tsl {
                 // Set initial button position
                 static constexpr float buttonStartX = 30;
                 
-                if (FullMode && !deactivateOriginalFooter) {
-                    // Get the exact gap width from ult::GAP_1
-                    const auto gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
-                    const float _halfGap = gapWidth / 2.0f;
-                    if (_halfGap != ult::halfGap.load(std::memory_order_acquire))
-                        ult::halfGap.store(_halfGap, std::memory_order_release);
-                
-                    // Calculate text dimensions for buttons without gaps
-                    const auto backTextWidth = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
-                    const auto selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
-                
-                    // Update widths to include the half-gap padding on each side
-                    const float _backWidth = backTextWidth + gapWidth;
-                    if (_backWidth != ult::backWidth.load(std::memory_order_acquire))
-                        ult::backWidth.store(_backWidth, std::memory_order_release);
-                    const float _selectWidth = selectTextWidth + gapWidth;
-                    if (_selectWidth != ult::selectWidth.load(std::memory_order_acquire))
-                        ult::selectWidth.store(_selectWidth, std::memory_order_release);
-                
-                    const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
-                
-                    // Draw back button rectangle
-                    if (ult::touchingBack.load(std::memory_order_acquire)) {
-                        renderer->drawRoundedRect(buttonStartX+2 - _halfGap, buttonY, _backWidth-1, 73.0f, 12.0f, a(clickColor));
-                    }
-                
-                    // Draw select button rectangle (starts right after back button)
-                    if (ult::touchingSelect.load(std::memory_order_acquire) && !m_noClickableItems) {
-                        renderer->drawRoundedRect(buttonStartX+2 - _halfGap + _backWidth+1, buttonY,
-                                                  _selectWidth-2, 73.0f, 12.0f, a(clickColor));
-                    }
-                }
+                if (FullMode && !deactivateOriginalFooter)
+                    updateFooterButtonWidths(renderer,
+                        "\uE0E1" + ult::GAP_2 + ult::BACK,
+                        "\uE0E0" + ult::GAP_2 + ult::OK,
+                        m_noClickableItems);
                 
                 // Build current bottom line
                 const std::string currentBottomLine = 
@@ -4755,7 +5232,7 @@ namespace tsl {
                 if (!deactivateOriginalFooter) {
                     renderer->drawStringWithColoredSections(menuBottomLine, false, tsl::s_footerSpecialChars,
                                                             buttonStartX, 693, 23, bottomTextColor, buttonColor);
-                    if (!m_noClickableItems && !usingFocusColor) {
+                    if (!m_noClickableItems && !selectIsUsingFocusedColor) {
                         renderer->drawStringWithColoredSections("\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1, false,
                                                                 tsl::s_footerSpecialChars,
                                                                 buttonStartX + ult::backWidth.load(std::memory_order_acquire),
@@ -4766,12 +5243,8 @@ namespace tsl {
                 if (this->m_contentElement != nullptr)
                     this->m_contentElement->frame(renderer);
 
-                if (FullMode) {
-                    if (!ult::useRightAlignment)
-                        renderer->drawRect(447, 0, 448, 720, a(edgeSeparatorColor));
-                    else
-                        renderer->drawRect(0, 0, 1, 720, a(edgeSeparatorColor));
-                }
+                if (FullMode)
+                    drawEdgeSeparator(renderer);
             }
             
 
@@ -4869,8 +5342,11 @@ namespace tsl {
             
             virtual void draw(gfx::Renderer *renderer) override {
                 
-                renderer->fillScreen(a(defaultBackgroundColor));
-                renderer->drawWallpaper();
+                if (!ult::limitedMemory && !ult::refreshWallpaper.load(std::memory_order_acquire) &&
+                    !ult::wallpaperData.empty() && ult::correctFrameSize)
+                    renderer->drawWallpaper();
+                else
+                    renderer->fillScreen(a(defaultBackgroundColor));
                 renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(bottomSeparatorColor));
                 
                 #if USING_WIDGET_DIRECTIVE
@@ -4878,38 +5354,11 @@ namespace tsl {
                     renderer->drawWidget();
                 #endif
 
-                // Get the exact gap width from ult::GAP_1
-                const float gapWidth = renderer->getTextDimensions(ult::GAP_1, false, 23).first;
-                const float _halfGap = gapWidth / 2.0f;
-                if (_halfGap != ult::halfGap.load(std::memory_order_acquire))
-                    ult::halfGap.store(_halfGap, std::memory_order_release);
-            
-                // Calculate text dimensions for buttons without gaps
-                const float backTextWidth = renderer->getTextDimensions("\uE0E1" + ult::GAP_2 + ult::BACK, false, 23).first;
-                const float selectTextWidth = renderer->getTextDimensions("\uE0E0" + ult::GAP_2 + ult::OK, false, 23).first;
-            
-                // Store final widths with gap padding included
-                const float _backWidth = backTextWidth + gapWidth;
-                if (_backWidth != ult::backWidth.load(std::memory_order_acquire))
-                    ult::backWidth.store(_backWidth, std::memory_order_release);
-                const float _selectWidth = selectTextWidth + gapWidth;
-                if (_selectWidth != ult::selectWidth.load(std::memory_order_acquire))
-                    ult::selectWidth.store(_selectWidth, std::memory_order_release);
-            
-                // Set initial button position
+                updateFooterButtonWidths(renderer,
+                    "\uE0E1" + ult::GAP_2 + ult::BACK,
+                    "\uE0E0" + ult::GAP_2 + ult::OK,
+                    false);
                 static constexpr float buttonStartX = 30;
-                const float buttonY = static_cast<float>(cfg::FramebufferHeight - 73 + 1);
-            
-                // Draw back button rectangle
-                if (ult::touchingBack.load(std::memory_order_acquire)) {
-                    renderer->drawRoundedRect(buttonStartX+2 - _halfGap, buttonY, _backWidth-1, 73.0f, 12.0f, a(clickColor));
-                }
-            
-                // Draw select button rectangle
-                if (ult::touchingSelect.load(std::memory_order_acquire)) {
-                    renderer->drawRoundedRect(buttonStartX+2 - _halfGap + _backWidth+1, buttonY,
-                                              _selectWidth-2, 73.0f, 12.0f, a(clickColor));
-                }
             
                 // Draw bottom text
                 const std::string menuBottomLine = "\uE0E1" + ult::GAP_2 + ult::BACK + ult::GAP_1 +
@@ -4918,10 +5367,10 @@ namespace tsl {
                                                         {"\uE0E1", "\uE0E0", "\uE0ED", "\uE0EE"},
                                                         buttonStartX, 693, 23,
                                                         bottomTextColor, buttonColor);
-                if (!usingFocusColor) {
+                if (!selectIsUsingFocusedColor) {
                     renderer->drawStringWithColoredSections("\uE0E0" + ult::GAP_2 + ult::OK + ult::GAP_1, false,
                                                             {"\uE0E1", "\uE0E0", "\uE0ED", "\uE0EE"},
-                                                            buttonStartX + _backWidth, 693, 23,
+                                                            buttonStartX + ult::backWidth.load(std::memory_order_acquire), 693, 23,
                                                             unfocusedColor, unfocusedColor);
                 }
             
@@ -4931,10 +5380,7 @@ namespace tsl {
                 if (this->m_contentElement != nullptr)
                     this->m_contentElement->frame(renderer);
 
-                if (!ult::useRightAlignment)
-                    renderer->drawRect(447, 0, 448, 720, a(edgeSeparatorColor));
-                else
-                    renderer->drawRect(0, 0, 1, 720, a(edgeSeparatorColor));
+                drawEdgeSeparator(renderer);
             }
             
             virtual void layout(u16 parentX, u16 parentY, u16 parentWidth, u16 parentHeight) override {
@@ -5038,15 +5484,13 @@ namespace tsl {
             Color m_color;
         };
 
-
         class ListItem; // forward declaration
 
         static std::atomic<float> s_currentScrollVelocity{0};
         static std::atomic<bool> s_directionalKeyReleased{false};
         static std::atomic<bool> lastInternalTouchRelease{true};
 
-        static std::mutex s_safeToSwapMutex;
-        static std::atomic<bool> s_safeToSwap{false};
+        //static std::atomic<bool> s_swapPending{false};
         static std::atomic<bool> skipOnce{false};
 
         static std::atomic<bool> isTableScrolling{false};
@@ -5056,8 +5500,6 @@ namespace tsl {
         public:
             List() : Element() {
             
-                s_safeToSwap.store(false, std::memory_order_release);
-                
                 // Clear table scrolling flag when list is cleared
                 isTableScrolling.store(false, std::memory_order_release);
 
@@ -5080,7 +5522,6 @@ namespace tsl {
             }
             
             virtual ~List() {
-                s_safeToSwap.store(false, std::memory_order_release);
                 purgePendingItems();
                 clearItems();
             }
@@ -5088,8 +5529,7 @@ namespace tsl {
                                                             
             virtual void draw(gfx::Renderer* renderer) override {
             
-                s_safeToSwap.store(false, std::memory_order_release);
-                std::lock_guard<std::mutex> lock(s_safeToSwapMutex);
+                //s_swapPending.store(false, std::memory_order_release);
                 
                 if (m_clearList) {
                     clearItems();
@@ -5174,9 +5614,44 @@ namespace tsl {
                     m_hasRenderedInitialFocus = true;
                 }
             
+                // Scissor constants that mirror exactly what TableDrawer::draw() sets:
+                //   enableScissoring(0, 88, FramebufferWidth, FramebufferHeight - 73 - 97 + 2 + 5)
+                // The List's logical bounds (topBound ≈ 97, bottomBound ≈ 647) don't match this,
+                // which causes two culling bugs for table items:
+                //
+                //  TOP BUG  – rect vanishes too early while scrolling up:
+                //    Outer cull stops when logical_bottom ≤ topBound (97), but the rounded-rect
+                //    background extends (20 − endGap + 2) px below logical_bottom (≤ 19 px for
+                //    the smallest endGap used).  Background is still inside scissor [88, 645] for
+                //    those extra pixels, so dropping the draw call makes the rect jump-disappear.
+                //    Fix: keep drawing until  logical_bottom + kTableBGOverhang > kTableScissorTop,
+                //    i.e. until the background has fully scrolled above the scissor edge.
+                //
+                //  BOTTOM BUG – lines appear only when they can fit (entering from below):
+                //    Outer cull starts when logical_top < bottomBound (647), but the first row
+                //    isn't drawn until logical_top + startGap < kTableScissorBottom (645), i.e.
+                //    logical_top < 625.  The 22 px gap (647→625) shows background with no rows.
+                //    Fix: don't start the draw call until the first row is about to enter the
+                //    scissor, i.e. logical_top < kTableScissorBottom − kTableFirstRowGap.
+                static constexpr s32 kTableScissorTop   = 88;
+                const         s32 kTableScissorBottom   = kTableScissorTop
+                    + static_cast<s32>(cfg::FramebufferHeight) - 73 - 97 + 2 + 5;
+                // Background overhang below logical bottom = 20 − endGap + 2.
+                // Worst case (smallest endGap = 3) → 19 px; use 20 to be safe.
+                static constexpr s32 kTableBGOverhang   = 20;
+                // Default startGap in buildTableDrawerLines (first row y-offset from logical top).
+                static constexpr s32 kTableFirstRowGap  = 20;
+
                 for (Element* entry : m_items) {
-                    if (entry->getBottomBound() > topBound && entry->getTopBound() < bottomBound) {
-                        entry->frame(renderer);
+                    if (entry->isTable()) {
+                        if (entry->getBottomBound() + kTableBGOverhang  > kTableScissorTop &&
+                            entry->getTopBound()                         < kTableScissorBottom - kTableFirstRowGap) {
+                            entry->frame(renderer);
+                        }
+                    } else {
+                        if (entry->getBottomBound() > topBound && entry->getTopBound() < bottomBound) {
+                            entry->frame(renderer);
+                        }
                     }
                 }
             
@@ -5189,7 +5664,6 @@ namespace tsl {
                     }
                 }
                 
-                s_safeToSwap.store(true, std::memory_order_release);
             }
             
             void resolveJumpImmediately() {
@@ -5700,7 +6174,13 @@ namespace tsl {
                         }
                     }
                     
-                    // Emergency correction
+                    // Emergency correction: only activate when the scroll target (m_nextOffset)
+                    // does NOT already bring the focused item into view.  Without this guard,
+                    // navigateUp/Down sets m_nextOffset = idealOffset via updateScrollOffset and
+                    // then the EC immediately slams m_offset there (up to 0.9× of the full
+                    // distance in a single frame), causing the jarring jump the user sees.
+                    // When the animation is already heading to the right place, let the smooth
+                    // path handle it.
                     if (m_focusedIndex < m_items.size()) {
                         float itemTop = 0.0f;
                         for (size_t i = 0; i < m_focusedIndex; ++i) {
@@ -5710,16 +6190,23 @@ namespace tsl {
                         const float viewBottom = m_offset + getHeight();
                         
                         if (itemTop < m_offset || itemBottom > viewBottom) {
-                            const float emergencySpeed = (itemBottom < m_offset || itemTop > viewBottom) ? 0.9f : 0.6f;
-                            m_offset += diff * emergencySpeed;
-                            m_scrollVelocity = diff * 0.3f;
-                            s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
+                            const float futureViewBottom = m_nextOffset + static_cast<float>(getHeight());
+                            const bool itemWillBeVisible =
+                                (itemTop  >= m_nextOffset - 1.0f) &&
+                                (itemBottom <= futureViewBottom + 1.0f);
                             
-                            if (prevOffset != m_offset) {
-                                invalidate();
-                                prevOffset = m_offset;
+                            if (!itemWillBeVisible) {
+                                const float emergencySpeed = (itemBottom < m_offset || itemTop > viewBottom) ? 0.9f : 0.6f;
+                                m_offset += diff * emergencySpeed;
+                                m_scrollVelocity = diff * 0.3f;
+                                s_currentScrollVelocity.store(m_scrollVelocity, std::memory_order_release);
+                                
+                                if (prevOffset != m_offset) {
+                                    invalidate();
+                                    prevOffset = m_offset;
+                                }
+                                return;
                             }
-                            return;
                         }
                     }
                     
@@ -5819,7 +6306,61 @@ namespace tsl {
                 const float savedOffset = m_offset;
                 const float savedNextOffset = m_nextOffset;
                 
-                // Single loop with wraparound logic - visits each item exactly once
+                // When recovering from touch scroll (no oldFocus, scrolled into a table region),
+                // search BOTH directions from startIndex and pick whichever focusable item is
+                // closest to the current viewport center.  Without this the forward-wraparound
+                // search skips an entire long table and lands on an item at the opposite end of
+                // the list, causing either a jarring upward jump (DOWN) or blind scrollUp stutter (UP).
+                if (!oldFocus && startIndex > 0) {
+                    const float viewCenter = savedOffset + static_cast<float>(getHeight()) * 0.5f;
+
+                    // Forward search (with wraparound)
+                    size_t fwdIdx = itemCount;
+                    for (size_t count = 0; count < itemCount; ++count) {
+                        const size_t i = (startIndex + count) % itemCount;
+                        if (!m_items[i]->isTable()) {
+                            Element* f = m_items[i]->requestFocus(oldFocus, FocusDirection::None);
+                            if (f && f != oldFocus) { fwdIdx = i; break; }
+                        }
+                    }
+
+                    // Backward search (no wraparound — items before startIndex)
+                    size_t bkwIdx = itemCount;
+                    for (ssize_t j = static_cast<ssize_t>(startIndex) - 1; j >= 0; --j) {
+                        const size_t i = static_cast<size_t>(j);
+                        if (!m_items[i]->isTable()) {
+                            Element* f = m_items[i]->requestFocus(oldFocus, FocusDirection::None);
+                            if (f && f != oldFocus) { bkwIdx = i; break; }
+                        }
+                    }
+
+                    // Pick whichever candidate is closer to the viewport centre
+                    size_t bestIdx = itemCount;
+                    if (fwdIdx < itemCount && bkwIdx < itemCount) {
+                        const float fwdCenter = calculateItemPosition(fwdIdx) + m_items[fwdIdx]->getHeight() * 0.5f;
+                        const float bkwCenter = calculateItemPosition(bkwIdx) + m_items[bkwIdx]->getHeight() * 0.5f;
+                        bestIdx = (std::abs(bkwCenter - viewCenter) <= std::abs(fwdCenter - viewCenter))
+                                  ? bkwIdx : fwdIdx;
+                    } else if (bkwIdx < itemCount) {
+                        bestIdx = bkwIdx;
+                    } else if (fwdIdx < itemCount) {
+                        bestIdx = fwdIdx;
+                    }
+
+                    if (bestIdx < itemCount) {
+                        Element* newFocus = m_items[bestIdx]->requestFocus(oldFocus, FocusDirection::None);
+                        if (newFocus && newFocus != oldFocus) {
+                            m_focusedIndex = bestIdx;
+                            m_offset = savedOffset;
+                            m_nextOffset = savedNextOffset;
+                            return newFocus;
+                        }
+                    }
+                    // Fall through to original logic if nothing found above
+                }
+                
+                // Original single forward-wraparound loop (used when oldFocus is set,
+                // when startIndex==0, or as fallback)
                 for (size_t count = 0; count < itemCount; ++count) {
                     const size_t i = (startIndex + count) % itemCount;
                     
@@ -5948,6 +6489,21 @@ namespace tsl {
                     scrollUp();
                     m_stoppedAtBoundary = false;
                     return oldFocus;
+                }
+                
+                // If the currently focused item is off-screen above (e.g. focus was restored
+                // to the nearest item after a touch scroll, but the list is still scrolled deep
+                // into a table below it), scroll up toward it instead of immediately jumping to
+                // the item above via navigateUp.  Without this guard, navigateUp(ListItem B)
+                // would succeed (finding ListItem A) and set m_nextOffset=0, causing the list
+                // to zoom all the way to the top in one press rather than scrolling gradually.
+                if (!atTop && m_focusedIndex < m_items.size()) {
+                    const float itemTop = calculateItemPosition(m_focusedIndex);
+                    if (itemTop < m_offset) {
+                        isTableScrolling.store(true, std::memory_order_release);
+                        scrollUp();
+                        return oldFocus;
+                    }
                 }
                 
                 Element* result = navigateUp(oldFocus);
@@ -6556,6 +7112,7 @@ namespace tsl {
             u32 width, height;
             u64 m_touchStartTime_ns;
             bool isLocked = false;
+            bool m_touched = false;
 
             u64 m_shortHoldKey = KEY_Y;
             u64 m_longHoldKey = KEY_X;
@@ -6574,7 +7131,7 @@ namespace tsl {
             virtual ~ListItem() = default;
         
             virtual void draw(gfx::Renderer *renderer) override {
-                const bool useClickTextColor = m_flags.m_touched && Element::getInputMode() == InputMode::Touch && ult::touchInBounds;
+                const bool useClickTextColor = m_touched && Element::getInputMode() == InputMode::Touch && ult::touchInBounds;
                 
                 if (useClickTextColor && !m_flags.m_isTouchHolding) [[unlikely]]
                     renderer->drawRectAdaptive(this->getX() + 4, this->getY(), this->getWidth() - 8, this->getHeight(), aWithOpacity(clickColor));
@@ -6656,9 +7213,9 @@ namespace tsl {
                             triggerOnSound.store(true, std::memory_order_release);
                         else
                             triggerEnterSound.store(true, std::memory_order_release);
+                        signalFeedback();
                     } else {
-                        triggerRumbleDoubleClick.store(true,std::memory_order_release);
-                        triggerWallSound.store(true, std::memory_order_release);
+                        triggerWallFeedback(true);
                     }
                     
                     if (m_flags.m_useClickAnimation)
@@ -6672,7 +7229,7 @@ namespace tsl {
         
             virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, s32 initialX, s32 initialY) override {
                 if (event == TouchEvent::Touch) [[likely]] {
-                    if ((m_flags.m_touched = inBounds(currX, currY))) [[likely]] {
+                    if ((m_touched = inBounds(currX, currY))) [[likely]] {
                         m_touchStartTime_ns = ult::nowNs();
                         m_flags.m_isTouchHolding = false;  // Will be set to true when hold activates
                         m_flags.m_shortThresholdCrossed = false;
@@ -6681,7 +7238,7 @@ namespace tsl {
                     }
                 }
                 
-                if (event == TouchEvent::Hold && m_flags.m_touched) [[likely]] {
+                if (event == TouchEvent::Hold && m_touched) [[likely]] {
                     const u64 touchDuration_ns = ult::nowNs() - m_touchStartTime_ns;
                     const float touchDurationInSeconds = static_cast<float>(touchDuration_ns) * 1e-9f;
                     
@@ -6696,16 +7253,18 @@ namespace tsl {
                     if (m_flags.m_useLongThreshold && !m_flags.m_longThresholdCrossed && touchDurationInSeconds >= 1.0f) [[unlikely]] {
                         m_flags.m_longThresholdCrossed = true;
                         triggerRumbleClick.store(true, std::memory_order_release);
+                        signalFeedback();
                     } else if (m_flags.m_useShortThreshold && !m_flags.m_shortThresholdCrossed && touchDurationInSeconds >= 0.5f) [[unlikely]] {
                         m_flags.m_shortThresholdCrossed = true;
                         triggerRumbleClick.store(true, std::memory_order_release);
+                        signalFeedback();
                     }
                     
                     return true;  // Keep handling hold
                 }
             
-                if (event == TouchEvent::Release && m_flags.m_touched) [[likely]] {
-                    m_flags.m_touched = false;
+                if (event == TouchEvent::Release && m_touched) [[likely]] {
+                    m_touched = false;
                     const bool wasHolding = m_flags.m_isTouchHolding;
                     m_flags.m_isTouchHolding = false;  // Stop tracking hold on release
                     
@@ -6713,6 +7272,7 @@ namespace tsl {
                         m_clickAnimationProgress = 0;
                         // Only trigger normal click if we weren't in a hold
                         if (!wasHolding) {
+                            tsl::shiftItemFocus(this);
                             return onClick(determineKeyOnTouchRelease());
                         }
                     }
@@ -6726,6 +7286,7 @@ namespace tsl {
                     m_scrollOffset = 0;
                     timeIn_ns = ult::nowNs();
                     Element::setFocused(state);
+                    if (state) s_lastFocusedItemText = m_text;
                 }
             }
         
@@ -6858,7 +7419,6 @@ namespace tsl {
                 bool m_scroll : 1;
                 bool m_truncated : 1;
                 bool m_faint : 1;
-                bool m_touched : 1;
                 bool m_hasCustomTextColor : 1;
                 bool m_hasCustomValueColor : 1;
                 bool m_useClickAnimation : 1;
@@ -6950,10 +7510,10 @@ namespace tsl {
                     renderer->enableScissoring(getX() + 6, 97, m_maxWidth + (m_value.empty() ? 49 : 27), tsl::cfg::FramebufferHeight - 170);
                 #if IS_LAUNCHER_DIRECTIVE
                     renderer->drawStringWithColoredSections(m_scrollText, false, specialSymbols, getX() + 19 - static_cast<s32>(m_scrollOffset), getY() + 45 - yOffset, 23,
-                        !ult::useSelectionText ? defaultTextColor: (useClickTextColor ? clickTextColor : selectedTextColor), starColor);
+                        !ult::useSelectionText ? (m_flags.m_hasCustomTextColor ? m_customTextColor : defaultTextColor): (useClickTextColor ? clickTextColor : selectedTextColor), starColor);
                 #else
                     renderer->drawStringWithColoredSections(m_scrollText, false, specialSymbols, getX() + 19 - static_cast<s32>(m_scrollOffset), getY() + 45 - yOffset, 23,
-                        !ult::useSelectionText ? defaultTextColor: (useClickTextColor ? clickTextColor : selectedTextColor), textSeparatorColor);
+                        !ult::useSelectionText ? (m_flags.m_hasCustomTextColor ? m_customTextColor : defaultTextColor): (useClickTextColor ? clickTextColor : selectedTextColor), textSeparatorColor);
                 #endif
                     renderer->disableScissoring();
                     handleScrolling();
@@ -7305,6 +7865,7 @@ namespace tsl {
                         triggerOnSound.store(true, std::memory_order_release);
                     else
                         triggerOffSound.store(true, std::memory_order_release);
+                    signalFeedback();
                     
                     
                     this->m_state = !this->m_state;
@@ -7484,7 +8045,7 @@ namespace tsl {
                     if (!m_scroll) m_scroll = true;
                     handleScrolling();
             
-                    renderer->enableScissoring(textX, textY - fontHeight, m_maxWidth, fontHeight + 8);
+                    renderer->enableScissoring(textX, ult::activeHeaderHeight-8, m_maxWidth, cfg::FramebufferHeight - 73 - (ult::activeHeaderHeight-8));
                     renderer->drawStringWithColoredSections(
                         m_scrollText, false, s_dividerSpecialChars,
                         textX - static_cast<s32>(m_scrollOffset),
@@ -7713,9 +8274,10 @@ namespace tsl {
              * @param units Units text for V2 style
              */
             TrackBar(const char icon[3], bool usingStepTrackbar=false, bool usingNamedStepTrackbar = false, 
-                    bool useV2Style = false, const std::string& label = "", const std::string& units = "") 
+                    bool useV2Style = false, const std::string& label = "", const std::string& units = "",
+                    bool unlockedTrackbar = true) 
                 : m_icon(icon), m_usingStepTrackbar(usingStepTrackbar), m_usingNamedStepTrackbar(usingNamedStepTrackbar),
-                  m_useV2Style(useV2Style), m_label(label), m_units(units) {
+                  m_unlockedTrackbar(unlockedTrackbar), m_useV2Style(useV2Style), m_label(label), m_units(units) {
                 m_isItem = true;
             }
 
@@ -7732,18 +8294,55 @@ namespace tsl {
                 return this;
             }
 
+            virtual void setFocused(bool focused) override {
+                Element::setFocused(focused);
+                if (focused) s_lastFocusedItemText = m_label;
+            }
             
             virtual bool handleInput(u64 keysDown, u64 keysHeld, const HidTouchState &touchPos, HidAnalogStickState leftJoyStick, HidAnalogStickState rightJoyStick) override {
                 const u64 keysReleased = m_prevKeysHeld & ~keysHeld;
                 m_prevKeysHeld = keysHeld;
                 
                 const u64 currentTime_ns = ult::nowNs();
-                static u64 lastUpdate_ns = currentTime_ns;
-                const u64 elapsed_ns = currentTime_ns - lastUpdate_ns;
+                
+                const u64 elapsed_ns = currentTime_ns - m_lastUpdate_ns;
             
-                if (keysDown & KEY_A) {
-                    this->triggerClickAnimation();
-                    triggerEnterFeedback();
+                // KEY_R + directional: shake highlight (same as V2)
+                if (keysHeld & KEY_R) {
+                    if (keysDown & KEY_UP && !(keysHeld & ~KEY_UP & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Up);
+                    else if (keysDown & KEY_DOWN && !(keysHeld & ~KEY_DOWN & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Down);
+                    else if (keysDown & KEY_LEFT && !(keysHeld & ~KEY_LEFT & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Left);
+                    else if (keysDown & KEY_RIGHT && !(keysHeld & ~KEY_RIGHT & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Right);
+                    return true;
+                }
+            
+                // KEY_A: lock/unlock toggle (when locked), or click animation (when unlocked)
+                if ((keysDown & KEY_A) && !(keysHeld & ~KEY_A & ALL_KEYS_MASK)) {
+                    if (!m_unlockedTrackbar) {
+                        ult::atomicToggle(ult::allowSlide);
+                        m_holding = false;
+                        if (ult::allowSlide.load(std::memory_order_acquire)) {
+                            // Unlocking: rumble + on sound only, no click animation, no enter feedback
+                            triggerOnFeedback();
+                        } else {
+                            // Locking: rumble + off sound only, no click animation
+                            triggerOffFeedback();
+                        }
+                    } else {
+                        // Always-unlocked trackbar: full click animation + enter feedback
+                        this->triggerClickAnimation();
+                        triggerEnterFeedback();
+                    }
+                    return true;
+                }
+            
+                // Guard all movement behind lock state
+                if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
+                    return false;
                 }
             
                 static s16 lastHapticSegment = -1;
@@ -7755,11 +8354,11 @@ namespace tsl {
                     if (m_wasLastHeld) {
                         m_wasLastHeld = false;
                         m_holding = false;
-                        lastUpdate_ns = currentTime_ns;
+                        m_lastUpdate_ns = currentTime_ns;
                         return true;
                     } else if (m_holding) {
                         m_holding = false;
-                        lastUpdate_ns = currentTime_ns;
+                        m_lastUpdate_ns = currentTime_ns;
                         return true;
                     }
                 }
@@ -7769,27 +8368,30 @@ namespace tsl {
                     return true;
             
                 // Handle initial key press
+                const s16 sliderMax = m_maxValue - m_minValue;
+
                 if (keysDown & KEY_LEFT || keysDown & KEY_RIGHT) {
+                    triggerRumbleClick.store(true, std::memory_order_release);
+                    signalFeedback();
+
                     m_holding = true;
                     m_wasLastHeld = false;
                     m_holdStartTime_ns = currentTime_ns;
-                    lastUpdate_ns = currentTime_ns;
-                    
-                    // Perform initial single tick
+                    m_lastUpdate_ns = currentTime_ns;
                     if (keysDown & KEY_LEFT && this->m_value > 0) {
                         this->m_value--;
                         this->m_valueChangedListener(this->m_value);
                         
-                        const s16 currentSegment = (this->m_value * 10) / 100;
+                        const s16 currentSegment = (this->m_value * 10) / sliderMax;
                         if (this->m_value == 0 || currentSegment != lastHapticSegment) {
                             lastHapticSegment = currentSegment;
                             triggerNavigationFeedback();
                         }
-                    } else if (keysDown & KEY_RIGHT && this->m_value < 100) {
+                    } else if (keysDown & KEY_RIGHT && this->m_value < sliderMax) {
                         this->m_value++;
                         this->m_valueChangedListener(this->m_value);
                         
-                        const s16 currentSegment = (this->m_value * 10) / 100;
+                        const s16 currentSegment = (this->m_value * 10) / sliderMax;
                         if (this->m_value == 0 || currentSegment != lastHapticSegment) {
                             lastHapticSegment = currentSegment;
                             triggerNavigationFeedback();
@@ -7802,12 +8404,10 @@ namespace tsl {
                 if (m_holding && ((keysHeld & KEY_LEFT) || (keysHeld & KEY_RIGHT))) {
                     const u64 holdDuration_ns = currentTime_ns - m_holdStartTime_ns;
             
-                    // Initial delay before repeating starts
-                    static constexpr u64 initialDelay_ns = 300000000ULL;  // 300ms
-                    // Calculate interval with acceleration
-                    static constexpr u64 initialInterval_ns = 67000000ULL;  // ~67ms
-                    static constexpr u64 shortInterval_ns = 10000000ULL;    // ~10ms
-                    static constexpr u64 transitionPoint_ns = 1000000000ULL; // 1 second
+                    static constexpr u64 initialDelay_ns = 300000000ULL;
+                    static constexpr u64 initialInterval_ns = 67000000ULL;
+                    static constexpr u64 shortInterval_ns = 10000000ULL;
+                    static constexpr u64 transitionPoint_ns = 1000000000ULL;
             
                     if (holdDuration_ns < initialDelay_ns) {
                         return true;
@@ -7822,28 +8422,28 @@ namespace tsl {
                             this->m_value--;
                             this->m_valueChangedListener(this->m_value);
                             
-                            const s16 currentSegment = (this->m_value * 10) / 100;
+                            const s16 currentSegment = (this->m_value * 10) / sliderMax;
                             if (this->m_value == 0 || currentSegment != lastHapticSegment) {
                                 lastHapticSegment = currentSegment;
                                 triggerNavigationFeedback();
                             }
                             
-                            lastUpdate_ns = currentTime_ns;
+                            m_lastUpdate_ns = currentTime_ns;
                             m_wasLastHeld = true;
                             return true;
                         }
                         
-                        if (keysHeld & KEY_RIGHT && this->m_value < 100) {
+                        if (keysHeld & KEY_RIGHT && this->m_value < sliderMax) {
                             this->m_value++;
                             this->m_valueChangedListener(this->m_value);
                             
-                            const s16 currentSegment = (this->m_value * 10) / 100;
+                            const s16 currentSegment = (this->m_value * 10) / sliderMax;
                             if (this->m_value == 0 || currentSegment != lastHapticSegment) {
                                 lastHapticSegment = currentSegment;
                                 triggerNavigationFeedback();
                             }
                             
-                            lastUpdate_ns = currentTime_ns;
+                            m_lastUpdate_ns = currentTime_ns;
                             m_wasLastHeld = true;
                             return true;
                         }
@@ -7856,82 +8456,95 @@ namespace tsl {
             }
                         
             virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, s32 initialX, s32 initialY) override {
-                const u16 trackBarWidth = this->getWidth() - 95;
-                const u16 handlePos = (trackBarWidth * (this->m_value - 0)) / (100 - 0);
-                const s32 circleCenterX = this->getX() + 59 + handlePos;
-                const s32 circleCenterY = this->getY() + 40 + 16 - 1 - (m_usingNamedStepTrackbar ? 0 : 11);
+                s32 trackBarLeft = this->getX() + 59;
+                s32 width        = this->getWidth() - 95;
+
+                if (m_icon[0] != '\0') {
+                    const s32 iconOffset = 14 + 23;
+                    trackBarLeft += iconOffset;
+                    width        -= iconOffset;
+                }
+
+                const s32 trackBarRight = trackBarLeft + width;
+                const s16 sliderSpan    = m_maxValue - m_minValue;  // total steps − 1
+                const u16 handlePos     = (width * this->m_value) / sliderSpan;
+                const s32 circleCenterX = trackBarLeft + handlePos;
+                const s32 circleCenterY = this->getY() + 40 + 16 - 3 - ((!m_usingNamedStepTrackbar && !m_useV2Style) ? 11 : 0);
                 static constexpr s32 circleRadius = 16;
                 static bool triggerOnce = true;
                 static s16 lastHapticSegment = -1;
-                
-                const bool touchInCircle = (std::abs(currX - circleCenterX) <= circleRadius) && (std::abs(currY - circleCenterY) <= circleRadius);
-                
-                // Check horizontal bounds only (allow vertical drift)
-                const s32 trackBarLeft = this->getX() + 59;
-                const s32 trackBarRight = trackBarLeft + trackBarWidth;
+                static bool wasOriginallyLocked = false;
+
+                // Use initialX/Y (where the finger first landed) for the hit-test so
+                // that dragging immediately tracks position — same as TrackBarV2.
+                const bool touchInCircle = (std::abs(initialX - circleCenterX) <= circleRadius) &&
+                                           (std::abs(initialY - circleCenterY) <= circleRadius);
                 const bool currentlyInHorizontalBounds = (currX >= trackBarLeft && currX <= trackBarRight);
-                
+
+                // Touch start: temporarily unlock a locked slider for the drag duration.
+                if (event == TouchEvent::Touch && touchInCircle) {
+                    wasOriginallyLocked = !m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire);
+                    if (wasOriginallyLocked)
+                        ult::allowSlide.store(true, std::memory_order_release);
+                }
+
                 if (event == TouchEvent::Release) {
                     triggerOnce = true;
                     lastHapticSegment = -1;
-                    
-                    if (touchInSliderBounds) {
-                        triggerRumbleDoubleClick.store(true, std::memory_order_release);
-                        triggerOffSound.store(true, std::memory_order_release);
+
+                    if (wasOriginallyLocked) {
+                        ult::allowSlide.store(false, std::memory_order_release);
+                        wasOriginallyLocked = false;
                     }
-                    
+
+                    if (touchInSliderBounds) {
+                        triggerOffFeedback(true);
+
+                        tsl::shiftItemFocus(this);
+                    }
+
                     touchInSliderBounds = false;
                     return false;
                 }
-            
-                if (touchInCircle || touchInSliderBounds) {
-                    // If we were touching but now went out of horizontal bounds, clamp to edge value then stop
+
+                const bool isUnlocked = m_unlockedTrackbar || ult::allowSlide.load(std::memory_order_acquire);
+
+                if ((touchInCircle || touchInSliderBounds) && isUnlocked) {
                     if (touchInSliderBounds && !currentlyInHorizontalBounds) {
-                        // Clamp to max if past right edge, min if past left edge
-                        if (currX > trackBarRight) {
-                            this->m_value = 100;
-                        } else if (currX < trackBarLeft) {
-                            this->m_value = 0;
-                        }
+                        // Finger dragged past an edge — clamp to that extreme.
+                        this->m_value = (currX > trackBarRight) ? sliderSpan : s16(0);
                         this->m_valueChangedListener(this->getProgress());
-                        
                         touchInSliderBounds = false;
                         return false;
                     }
-                    
-                    // Only update if we're still in horizontal bounds
+
                     if (currentlyInHorizontalBounds) {
-                        if (triggerOnce){
-                            triggerOnce = false;
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOnSound.store(true, std::memory_order_release);
-                        }
                         touchInSliderBounds = true;
-                        
-                        s16 newValue = (static_cast<float>(currX - trackBarLeft) / static_cast<float>(trackBarWidth)) * 100;
-                        
-                        if (newValue < 0) {
-                            newValue = 0;
-                        } else if (newValue > 100) {
-                            newValue = 100;
+                        if (triggerOnce) {
+                            triggerOnce = false;
+                            triggerOnFeedback();
                         }
-                
+
+                        // Round to nearest step (+0.5f) exactly as TrackBarV2 does — avoids
+                        // needing to drag past the midpoint before the value advances.
+                        const s16 newValue = std::max(s16(0), std::min(s16(sliderSpan),
+                            s16((currX - trackBarLeft) / static_cast<float>(width) * sliderSpan + 0.5f)));
+
                         if (newValue != this->m_value) {
                             this->m_value = newValue;
                             this->m_valueChangedListener(this->getProgress());
-                            
-                            const s16 currentSegment = (this->m_value * 10) / 100;
-                            
-                            if (this->m_value == 0 || currentSegment != lastHapticSegment) {
+
+                            const s16 currentSegment = (newValue * 10) / sliderSpan;
+                            if (newValue == 0 || currentSegment != lastHapticSegment) {
                                 lastHapticSegment = currentSegment;
                                 triggerNavigationFeedback();
                             }
                         }
-                
+
                         return true;
                     }
                 }
-            
+
                 return false;
             }
 
@@ -7954,30 +8567,29 @@ namespace tsl {
                 } else {
                     m_drawFrameless = false;
                 }
-
-
+            
                 s32 xPos = this->getX() + 59;
-                s32 yPos = this->getY() + 40 + 16 - 1;
+                s32 yPos = this->getY() + 40 + 16 - 3;
                 s32 width = this->getWidth() - 95;
                 const int maxValue = (m_usingStepTrackbar || m_usingNamedStepTrackbar) 
                                      ? ((100 / (this->m_numSteps - 1)) * (this->m_numSteps - 1))
                                      : 100;
                 u16 handlePos = width * (this->m_value) / maxValue;
-
-                if (!m_usingNamedStepTrackbar) {
+            
+                if (!m_usingNamedStepTrackbar && !m_useV2Style) {
                     yPos -= 11;
                 }
-
+            
                 s32 iconOffset = 0;
-
-                if (!m_useV2Style && m_icon[0] != '\0') {
+            
+                if (m_icon[0] != '\0') {
                     s32 iconWidth = 23;
                     iconOffset = 14 + iconWidth;
                     xPos += iconOffset;
                     width -= iconOffset;
-                    handlePos = (width) * (this->m_value) / (100);
+                    handlePos = (width) * (this->m_value) / (m_maxValue - m_minValue);
                 }
-
+            
                 // Draw step tick marks if this is a step trackbar
                 if (m_usingStepTrackbar || m_usingNamedStepTrackbar) {
                     const u8 numSteps = m_numSteps;
@@ -8001,51 +8613,61 @@ namespace tsl {
                         renderer->drawRect(stepX, baseY, 1, 8, stepColor);
                     }
                 }
-
+            
                 // Draw track bar background
                 drawBar(renderer, xPos, yPos-3, width, trackBarEmptyColor, !m_usingNamedStepTrackbar);
-
+            
+                const bool isEffectivelyUnlocked = m_unlockedTrackbar || ult::allowSlide.load(std::memory_order_acquire);
+            
                 if (!this->m_focused) {
                     drawBar(renderer, xPos, yPos-3, handlePos, trackBarFullColor, !m_usingNamedStepTrackbar);
                     renderer->drawCircle(xPos + handlePos, yPos, 16, true, a(m_drawFrameless ? s_highlightColor : trackBarSliderBorderColor));
-                    renderer->drawCircle(xPos + handlePos, yPos, 13, true, a((m_unlockedTrackbar || touchInSliderBounds) ? trackBarSliderMalleableColor : trackBarSliderColor));
+                    renderer->drawCircle(xPos + handlePos, yPos, 13, true, a((isEffectivelyUnlocked || touchInSliderBounds) ? trackBarSliderMalleableColor : trackBarSliderColor));
                 } else {
                     touchInSliderBounds = false;
                     if (m_unlockedTrackbar != ult::unlockedSlide.load(std::memory_order_acquire))
                         ult::unlockedSlide.store(m_unlockedTrackbar, std::memory_order_release);
                     drawBar(renderer, xPos, yPos-3, handlePos, trackBarFullColor, !m_usingNamedStepTrackbar);
                     renderer->drawCircle(xPos + x + handlePos, yPos +y, 16, true, a(s_highlightColor));
-                    renderer->drawCircle(xPos + x + handlePos, yPos +y, 12, true, a((ult::allowSlide.load(std::memory_order_acquire) || m_unlockedTrackbar) ? trackBarSliderMalleableColor : trackBarSliderColor));
+                    renderer->drawCircle(xPos + x + handlePos, yPos +y, 12, true, a(isEffectivelyUnlocked ? trackBarSliderMalleableColor : trackBarSliderColor));
                 }
-
-                // Draw icon (original style) or label + value (V2 style)
+            
+                // Draw icon (always if provided), then label + value (V2 style)
                 if (m_useV2Style) {
-                    // V2 Style: Draw label and value
                     std::string labelPart = this->m_label;
                     ult::removeTag(labelPart);
                 
                     std::string valuePart;
                     if (!m_usingNamedStepTrackbar) {
+                        // m_value is the direct offset from m_minValue (derived from the range).
+                        // For default (0,100): dispVal == m_value — identical to original behaviour.
+                        const int dispVal = static_cast<int>(m_minValue) + static_cast<int>(m_value);
+                        const std::string dispStr =
+                            (m_minValue < 0 && dispVal > 0 ? std::string("+") : std::string(""))
+                            + ult::to_string(dispVal);
                         valuePart = (m_units.compare("%") == 0 || m_units.compare("°C") == 0 || m_units.compare("°F") == 0)
-                                    ? ult::to_string(m_value) + m_units
-                                    : ult::to_string(m_value) + (m_units.empty() ? "" : " ") + m_units;
+                                    ? dispStr + m_units
+                                    : dispStr + (m_units.empty() ? "" : " ") + m_units;
                     } else {
                         valuePart = this->m_selection;
                     }
                 
                     const auto valueWidth = renderer->getTextDimensions(valuePart, false, 16).first;
-                
-                    renderer->drawString(labelPart, false, this->getX() + 59, this->getY() + 14 + 16, 16, 
+                    const s32 labelX = xPos;
+                    const s32 valueX = xPos + width - valueWidth;
+            
+                    renderer->drawString(labelPart, false, labelX, this->getY() + 14 + 16, 16, 
                                        ((!this->m_focused || !ult::useSelectionText) ? defaultTextColor : selectedTextColor));
-
-                    renderer->drawString(valuePart, false, this->getWidth() -17 - valueWidth, this->getY() + 14 + 16, 16, (this->m_focused && ult::useSelectionValue) ? selectedValueTextColor : onTextColor);
-                } else {
-                    // Original Style: Draw icon
+                    renderer->drawString(valuePart, false, valueX, this->getY() + 14 + 16, 16, 
+                                       (this->m_focused && ult::useSelectionValue) ? selectedValueTextColor : onTextColor);
+            
                     if (m_icon[0] != '\0')
-                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2, 23, tsl::style::color::ColorText);
+                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2+2, 30, ((!this->m_focused || !ult::useSelectionText) ? defaultTextColor : selectedTextColor));
+                } else {
+                    if (m_icon[0] != '\0')
+                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2+2, 30, ((!this->m_focused || !ult::useSelectionText) ? defaultTextColor : selectedTextColor));
                 }
-
-
+            
                 if (m_lastBottomBound != this->getTopBound())
                     renderer->drawRect(this->getX() + 4+20-1, this->getTopBound(), this->getWidth() + 6 + 10+20 +4, 1, a(separatorColor));
                 renderer->drawRect(this->getX() + 4+20-1, this->getBottomBound(), this->getWidth() + 6 + 10+20 +4, 1, a(separatorColor));
@@ -8062,18 +8684,11 @@ namespace tsl {
 
             virtual void drawHighlight(gfx::Renderer *renderer) override {
                 
-                // Get current time using ARM system tick for animation timing
                 const u64 currentTime_ns = ult::nowNs();
-                
-                // High precision time calculation - matches standard cosine wave timing
                 const double time_seconds = static_cast<double>(currentTime_ns) / 1000000000.0;
-                
-                // Standard cosine wave calculation with high precision
                 progress = (ult::cos(2.0 * ult::_M_PI * std::fmod(time_seconds, 1.0) - ult::_M_PI / 2) + 1.0) / 2.0;
             
-                // Determine which colors to interpolate based on animation state
                 if (m_clickAnimationActive) {
-                    // Handle click animation color transition
                     Color clickColor1 = highlightColor1;
                     Color clickColor2 = clickColor;
                     
@@ -8088,11 +8703,14 @@ namespace tsl {
                         m_clickAnimationActive = false;
                     }
                 } else {
-                    // Normal highlight animation
-                    s_highlightColor = lerpColor(highlightColor1, highlightColor2, progress);
+                    // Use dim colors when locked, bright colors when unlocked
+                    if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
+                        s_highlightColor = lerpColor(highlightColor3, highlightColor4, progress);
+                    } else {
+                        s_highlightColor = lerpColor(highlightColor1, highlightColor2, progress);
+                    }
                 }
                 
-                // Initialize position offsets
                 x = 0;
                 y = 0;
                 
@@ -8105,14 +8723,9 @@ namespace tsl {
                     if (t_ms >= SHAKE_DURATION_MS)
                         this->m_highlightShaking = false;
                     else {
-                        // Generate random amplitude only once per shake using the start time as seed
                         const double amplitude = 6.0 + ((this->m_highlightShakingStartTime / 1000000) % 5);
-                        const double progress = t_ms / SHAKE_DURATION_MS; // 0 to 1
-                        
-                        // Lighter damping so both bounces are visible
+                        const double progress = t_ms / SHAKE_DURATION_MS;
                         const double damping = 1.0 / (1.0 + 2.5 * progress * (1.0 + 1.3 * progress));
-                        
-                        // 2 full oscillations = 2 clear bounces
                         const double oscillation = ult::cos(ult::_M_PI * 4.0 * progress);
                         const double displacement = amplitude * oscillation * damping;
                         const int offset = static_cast<int>(displacement);
@@ -8131,7 +8744,6 @@ namespace tsl {
                     if (ult::useSelectionBG) {
                         renderer->drawRectAdaptive(this->getX() + x +19, this->getY() + y, this->getWidth()-11-4, this->getHeight(), aWithOpacity(selectionBGColor));
                     }
-                    
                     renderer->drawBorderedRoundedRect(this->getX() + x +19, this->getY() + y, this->getWidth()-11, this->getHeight(), 5, 5, a(s_highlightColor));
                 } else {
                     if (ult::useSelectionBG) {
@@ -8139,10 +8751,8 @@ namespace tsl {
                     }
                 }
             
-            
                 ult::onTrackBar.exchange(true, std::memory_order_acq_rel);
                 
-                // Click animation rendering - checking if animation is active
                 if (this->m_clickAnimationActive) {
                     const u64 elapsedTime_ns = currentTime_ns - this->m_clickAnimationStartTime;
             
@@ -8177,7 +8787,7 @@ namespace tsl {
              *
              * @return State
              */
-            virtual u8 getProgress() {
+            virtual u16 getProgress() {
                 return this->m_value;
             }
 
@@ -8186,7 +8796,7 @@ namespace tsl {
              *
              * @param state State
              */
-            virtual void setProgress(u8 value) {
+            virtual void setProgress(u16 value) {
                 this->m_value = value;
             }
 
@@ -8195,8 +8805,48 @@ namespace tsl {
              *
              * @param stateChangedListener Listener with the current state passed in as parameter
              */
-            void setValueChangedListener(std::function<void(u8)> valueChangedListener) {
+            void setValueChangedListener(std::function<void(u16)> valueChangedListener) {
                 this->m_valueChangedListener = valueChangedListener;
+            }
+
+            /**
+             * @brief Sets the display range and resolution of the slider.
+             *
+             * m_value internally stores the direct offset from minValue, so the
+             * slider spans (maxValue − minValue) + 1 discrete positions — one per
+             * unit of the range.  The displayed value is simply minValue + m_value.
+             *
+             * For the default range (0, 100) the behaviour is identical to the
+             * original: 101 positions, 0–100 displayed, listener receives 0–100.
+             *
+             * Example — audio balance (−150 % … 0 % … +150 %):
+             *   setRange(-150, 150);   // 301 positions, 1 % per step
+             *
+             * A "+" prefix is shown automatically when minValue < 0 && dispVal > 0.
+             *
+             * @param minValue  Displayed value at the far-left  position (m_value == 0)
+             * @param maxValue  Displayed value at the far-right position (m_value == maxValue − minValue)
+             */
+            void setRange(s16 minValue, s16 maxValue) {
+                m_minValue = minValue;
+                m_maxValue = maxValue;
+            }
+
+            virtual bool matchesJumpCriteria(const std::string& jumpText, const std::string& jumpValue, bool exactMatch = true) const override {
+                if (jumpText.empty() && jumpValue.empty()) return false;
+
+                bool textMatches, valueMatches;
+                if (exactMatch) {
+                    textMatches = (m_label == jumpText);
+                    valueMatches = (m_selection == jumpValue);
+                } else {
+                    textMatches = (!jumpText.empty() && m_label.find(jumpText) != std::string::npos);
+                    valueMatches = (!jumpValue.empty() && m_selection.find(jumpValue) != std::string::npos);
+                }
+
+                if (jumpText.empty())  return valueMatches;
+                if (jumpValue.empty()) return textMatches;
+                return textMatches && valueMatches;
             }
 
         protected:
@@ -8204,7 +8854,7 @@ namespace tsl {
             s16 m_value = 0;
             bool m_interactionLocked = false;
 
-            std::function<void(u8)> m_valueChangedListener = [](u8){};
+            std::function<void(u16)> m_valueChangedListener = [](u16){};
 
             bool m_usingStepTrackbar = false;
             bool m_usingNamedStepTrackbar = false;
@@ -8222,10 +8872,20 @@ namespace tsl {
             std::string m_selection; // Used for named step trackbars
             bool m_drawFrameless = false;
 
+            // Optional display-value range — does NOT affect slider position or geometry.
+            // Display-value range.  m_value holds the direct offset from m_minValue,
+            // so the slider spans (m_maxValue − m_minValue + 1) discrete positions.
+            // dispVal = m_minValue + m_value.  A "+" prefix is shown automatically
+            // when m_minValue < 0 && dispVal > 0.
+            // Defaults (0, 100) are exact no-ops — all existing subclasses unchanged.
+            s16 m_minValue = 0;
+            s16 m_maxValue = 100;
+
             float m_lastBottomBound;
 
             s16 m_index = 0;  // Add index tracking like V2
             u64 m_holdStartTime_ns = 0;
+            u64 m_lastUpdate_ns = 0;  // Per-instance hold-repeat timer (matches TrackBarV2)
             bool m_holding = false;
             bool m_wasLastHeld = false;
             u64 m_prevKeysHeld = 0;
@@ -8249,8 +8909,9 @@ namespace tsl {
              * @param units Units text for V2 style
              */
             StepTrackBar(const char icon[3], size_t numSteps, bool usingNamedStepTrackbar = false,
-                        bool useV2Style = false, const std::string& label = "", const std::string& units = "")
-                : TrackBar(icon, true, usingNamedStepTrackbar, useV2Style, label, units), m_numSteps(numSteps) { }
+                        bool useV2Style = false, const std::string& label = "", const std::string& units = "",
+                        bool unlockedTrackbar = true)
+                : TrackBar(icon, true, usingNamedStepTrackbar, useV2Style, label, units, unlockedTrackbar), m_numSteps(numSteps) {}
 
             virtual ~StepTrackBar() {}
 
@@ -8262,14 +8923,47 @@ namespace tsl {
                 static u64 lastUpdate_ns = currentTime_ns;
                 const u64 elapsed_ns = currentTime_ns - lastUpdate_ns;
             
-                if (keysDown & KEY_A) {
-                    this->triggerClickAnimation();
-                    triggerEnterFeedback();
+                // KEY_R + directional: shake highlight
+                if (keysHeld & KEY_R) {
+                    if (keysDown & KEY_UP && !(keysHeld & ~KEY_UP & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Up);
+                    else if (keysDown & KEY_DOWN && !(keysHeld & ~KEY_DOWN & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Down);
+                    else if (keysDown & KEY_LEFT && !(keysHeld & ~KEY_LEFT & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Left);
+                    else if (keysDown & KEY_RIGHT && !(keysHeld & ~KEY_RIGHT & ~KEY_R & ALL_KEYS_MASK))
+                        this->shakeHighlight(FocusDirection::Right);
+                    return true;
+                }
+                
+                // KEY_A: lock/unlock toggle (when locked), or click animation (when unlocked)
+                if ((keysDown & KEY_A) && !(keysHeld & ~KEY_A & ALL_KEYS_MASK)) {
+                    if (!m_unlockedTrackbar) {
+                        ult::atomicToggle(ult::allowSlide);
+                        m_holding = false;
+                        if (ult::allowSlide.load(std::memory_order_acquire)) {
+                            // Unlocking: rumble + on sound only, no click animation, no enter feedback
+                            triggerOnFeedback();
+                        } else {
+                            // Locking: rumble + off sound only, no click animation
+                            triggerOffFeedback();
+                        }
+                    } else {
+                        // Always-unlocked trackbar: full click animation + enter feedback
+                        this->triggerClickAnimation();
+                        triggerEnterFeedback();
+                    }
+                    return true;
+                }
+            
+                // Guard all movement behind lock state
+                if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
+                    return false;
                 }
             
                 // Calculate actual max value based on steps
                 const int stepSize = 100 / (this->m_numSteps - 1);
-                const int maxValue = stepSize * (this->m_numSteps - 1);  // For 25 steps: 4 * 24 = 96
+                const int maxValue = stepSize * (this->m_numSteps - 1);
             
                 // Handle key release
                 if ((keysReleased & KEY_LEFT) || (keysReleased & KEY_RIGHT)) {
@@ -8296,14 +8990,13 @@ namespace tsl {
                     m_holdStartTime_ns = currentTime_ns;
                     lastUpdate_ns = currentTime_ns;
                     
-                    // Perform initial single tick
                     if (keysDown & KEY_LEFT && this->m_value > 0) {
                         triggerNavigationFeedback();
                         this->m_value = std::max(this->m_value - stepSize, 0);
                         this->m_valueChangedListener(this->getProgress());
-                    } else if (keysDown & KEY_RIGHT && this->m_value < maxValue) {  // CHANGED: was < 100
+                    } else if (keysDown & KEY_RIGHT && this->m_value < maxValue) {
                         triggerNavigationFeedback();
-                        this->m_value = std::min(this->m_value + stepSize, maxValue);  // CHANGED: was 100
+                        this->m_value = std::min(this->m_value + stepSize, maxValue);
                         this->m_valueChangedListener(this->getProgress());
                     }
                     return true;
@@ -8336,9 +9029,9 @@ namespace tsl {
                             return true;
                         }
                         
-                        if (keysHeld & KEY_RIGHT && this->m_value < maxValue) {  // CHANGED: was < 100
+                        if (keysHeld & KEY_RIGHT && this->m_value < maxValue) {
                             triggerNavigationFeedback();
-                            this->m_value = std::min(this->m_value + stepSize, maxValue);  // CHANGED: was 100
+                            this->m_value = std::min(this->m_value + stepSize, maxValue);
                             this->m_valueChangedListener(this->getProgress());
                             lastUpdate_ns = currentTime_ns;
                             m_wasLastHeld = true;
@@ -8354,81 +9047,78 @@ namespace tsl {
 
 
             virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, s32 initialX, s32 initialY) override {
-                // Calculate actual max value based on steps FIRST
                 const int stepSize = 100 / (this->m_numSteps - 1);
-                const int maxValue = stepSize * (this->m_numSteps - 1);  // For 25 steps: 96
-                
-                const u16 trackBarWidth = this->getWidth() - 95;
-                const u16 handlePos = (trackBarWidth * this->m_value) / maxValue;  // CHANGED: was /100
-                const s32 circleCenterX = this->getX() + 59 + handlePos;
-                const s32 circleCenterY = this->getY() + 40 + 16 - 1 - (m_usingNamedStepTrackbar ? 0 : 11);
+                const int maxValue = stepSize * (this->m_numSteps - 1);
+            
+                s32 trackBarLeft = this->getX() + 59;
+                s32 width        = this->getWidth() - 95;
+            
+                if (m_icon[0] != '\0') {
+                    const s32 iconOffset = 14 + 23;
+                    trackBarLeft += iconOffset;
+                    width        -= iconOffset;
+                }
+            
+                const s32 trackBarRight = trackBarLeft + width;
+                const u16 handlePos     = (width * this->m_value) / maxValue;
+                const s32 circleCenterX = trackBarLeft + handlePos;
+                const s32 circleCenterY = this->getY() + 40 + 16 - 3 - ((!m_usingNamedStepTrackbar && !m_useV2Style) ? 11 : 0);
                 static constexpr s32 circleRadius = 16;
                 static bool triggerOnce = true;
-                
+            
                 const bool touchInCircle = (std::abs(currX - circleCenterX) <= circleRadius) && (std::abs(currY - circleCenterY) <= circleRadius);
-                
-                // Check horizontal bounds only (allow vertical drift)
-                const s32 trackBarLeft = this->getX() + 59;
-                const s32 trackBarRight = trackBarLeft + trackBarWidth;
                 const bool currentlyInHorizontalBounds = (currX >= trackBarLeft && currX <= trackBarRight);
-                
+            
                 if (event == TouchEvent::Release) {
                     triggerOnce = true;
-                    
+            
                     if (touchInSliderBounds) {
-                        triggerRumbleDoubleClick.store(true, std::memory_order_release);
-                        triggerOffSound.store(true, std::memory_order_release);
+                        triggerOffFeedback(true);
+                        tsl::shiftItemFocus(this);
                     }
-                    
+            
                     touchInSliderBounds = false;
                     return false;
                 }
             
                 if (touchInCircle || touchInSliderBounds) {
-                    // If we were touching but now went out of horizontal bounds, clamp to edge value then stop
                     if (touchInSliderBounds && !currentlyInHorizontalBounds) {
-                        // Clamp to max if past right edge, min if past left edge
                         if (currX > trackBarRight) {
                             this->m_value = maxValue;
                         } else if (currX < trackBarLeft) {
                             this->m_value = 0;
                         }
                         this->m_valueChangedListener(this->getProgress());
-                        
+            
                         touchInSliderBounds = false;
                         return false;
                     }
-                    
-                    // Only update if we're still in horizontal bounds
+            
                     if (currentlyInHorizontalBounds) {
-                        if (triggerOnce){
+                        if (triggerOnce) {
                             triggerOnce = false;
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOnSound.store(true, std::memory_order_release);
+                            triggerOnFeedback();
                         }
-                
                         touchInSliderBounds = true;
-                        
-                        // CHANGED: Scale rawValue to maxValue instead of 100
-                        float rawValue = (static_cast<float>(currX - trackBarLeft) / static_cast<float>(trackBarWidth)) * maxValue;
+            
+                        float rawValue = (static_cast<float>(currX - trackBarLeft) / static_cast<float>(width)) * maxValue;
                         s16 newValue;
-                
+            
                         if (rawValue < 0) {
                             newValue = 0;
                         } else if (rawValue > maxValue) {
                             newValue = maxValue;
                         } else {
-                            // Round to nearest step
                             newValue = std::round(rawValue / stepSize) * stepSize;
                             newValue = std::min(std::max(newValue, s16(0)), s16(maxValue));
                         }
-                
+            
                         if (newValue != this->m_value) {
                             triggerNavigationFeedback();
                             this->m_value = newValue;
                             this->m_valueChangedListener(this->getProgress());
                         }
-                
+            
                         return true;
                     }
                 }
@@ -8441,7 +9131,7 @@ namespace tsl {
              *
              * @return State
              */
-            virtual u8 getProgress() override {
+            virtual u16 getProgress() override {
                 return this->m_value / (100 / (this->m_numSteps - 1));
             }
 
@@ -8450,8 +9140,8 @@ namespace tsl {
              *
              * @param state State
              */
-            virtual void setProgress(u8 value) override {
-                value = std::min(value, u8(this->m_numSteps - 1));
+            virtual void setProgress(u16 value) override {
+                value = std::min(value, u16(this->m_numSteps - 1));
                 this->m_value = value * (100 / (this->m_numSteps - 1));
             }
 
@@ -8467,13 +9157,11 @@ namespace tsl {
         class NamedStepTrackBar : public StepTrackBar {
         public:
             NamedStepTrackBar(const char icon[3], std::initializer_list<std::string> stepDescriptions,
-                             bool useV2Style = false, const std::string& label = "")
-                : StepTrackBar(icon, stepDescriptions.size(), true, useV2Style, label, ""), 
+                             bool useV2Style = false, const std::string& label = "", bool unlockedTrackbar = true)
+                : StepTrackBar(icon, stepDescriptions.size(), true, useV2Style, label, "", unlockedTrackbar), 
                   m_stepDescriptions(stepDescriptions.begin(), stepDescriptions.end()) {
                 this->m_usingNamedStepTrackbar = true;
                 m_numSteps = m_stepDescriptions.size();
-                
-                // Initialize m_selection with first step
                 if (!m_stepDescriptions.empty()) {
                     this->m_selection = m_stepDescriptions[0];
                 }
@@ -8483,11 +9171,11 @@ namespace tsl {
         
             virtual bool handleInput(u64 keysDown, u64 keysHeld, const HidTouchState &touchPos, 
                                     HidAnalogStickState leftJoyStick, HidAnalogStickState rightJoyStick) override {
-                const u8 prevProgress = this->getProgress();
+                const u16 prevProgress = this->getProgress();
                 const bool result = StepTrackBar::handleInput(keysDown, keysHeld, touchPos, leftJoyStick, rightJoyStick);
                 
                 if (this->getProgress() != prevProgress) {
-                    const u8 currentIndex = this->getProgress();
+                    const u16 currentIndex = this->getProgress();
                     if (currentIndex < m_stepDescriptions.size()) {
                         this->m_selection = m_stepDescriptions[currentIndex];
                     }
@@ -8498,11 +9186,11 @@ namespace tsl {
         
             virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, 
                                 s32 initialX, s32 initialY) override {
-                const u8 prevProgress = this->getProgress();
+                const u16 prevProgress = this->getProgress();
                 const bool result = StepTrackBar::onTouch(event, currX, currY, prevX, prevY, initialX, initialY);
                 
                 if (result && this->getProgress() != prevProgress) {
-                    const u8 currentIndex = this->getProgress();
+                    const u16 currentIndex = this->getProgress();
                     if (currentIndex < m_stepDescriptions.size()) {
                         this->m_selection = m_stepDescriptions[currentIndex];
                     }
@@ -8511,10 +9199,10 @@ namespace tsl {
                 return result;
             }
         
-            virtual void setProgress(u8 value) override {
+            virtual void setProgress(u16 value) override {
                 StepTrackBar::setProgress(value);
                 
-                const u8 currentIndex = this->getProgress();
+                const u16 currentIndex = this->getProgress();
                 if (currentIndex < m_stepDescriptions.size()) {
                     this->m_selection = m_stepDescriptions[currentIndex];
                 }
@@ -8533,14 +9221,14 @@ namespace tsl {
                 }
             
                 s32 xPos = this->getX() + 59;
-                s32 yPos = this->getY() + 40 + 16 - 1;
+                s32 yPos = this->getY() + 40 + 16 - 3;
                 s32 width = this->getWidth() - 95;
-                const int maxValue = (100 / (this->m_numSteps - 1)) * (this->m_numSteps - 1);  // For 25 steps: 96
-                u16 handlePos = width * (this->m_value) / maxValue;  // Changed from /100
+                const int maxValue = (100 / (this->m_numSteps - 1)) * (this->m_numSteps - 1);
+                u16 handlePos = width * (this->m_value) / maxValue;
                 
                 s32 iconOffset = 0;
             
-                if (!m_useV2Style && m_icon[0] != '\0') {
+                if (m_icon[0] != '\0') {
                     s32 iconWidth = 23;
                     iconOffset = 14 + iconWidth;
                     xPos += iconOffset;
@@ -8569,59 +9257,52 @@ namespace tsl {
                     }
                     renderer->drawRect(stepX, baseY, 1, 8, stepColor);
                 }
-        
+            
                 // Draw track bar background
-                drawBar(renderer, xPos, yPos-3, width, trackBarEmptyColor, false); // Not rounded for named step
+                drawBar(renderer, xPos, yPos-3, width, trackBarEmptyColor, false);
+            
+                const bool isEffectivelyUnlocked = m_unlockedTrackbar || ult::allowSlide.load(std::memory_order_acquire);
             
                 if (!this->m_focused) {
                     drawBar(renderer, xPos, yPos-3, handlePos, trackBarFullColor, false);
                     renderer->drawCircle(xPos + handlePos, yPos, 16, true, a(m_drawFrameless ? s_highlightColor : trackBarSliderBorderColor));
-                    renderer->drawCircle(xPos + handlePos, yPos, 13, true, a((m_unlockedTrackbar || touchInSliderBounds) ? trackBarSliderMalleableColor : trackBarSliderColor));
+                    renderer->drawCircle(xPos + handlePos, yPos, 13, true, a((isEffectivelyUnlocked || touchInSliderBounds) ? trackBarSliderMalleableColor : trackBarSliderColor));
                 } else {
                     touchInSliderBounds = false;
                     if (m_unlockedTrackbar != ult::unlockedSlide.load(std::memory_order_acquire))
                         ult::unlockedSlide.store(m_unlockedTrackbar, std::memory_order_release);
                     drawBar(renderer, xPos, yPos-3, handlePos, trackBarFullColor, false);
                     renderer->drawCircle(xPos + x + handlePos, yPos +y, 16, true, a(s_highlightColor));
-                    renderer->drawCircle(xPos + x + handlePos, yPos +y, 12, true, a((ult::allowSlide.load(std::memory_order_acquire) || m_unlockedTrackbar) ? trackBarSliderMalleableColor : trackBarSliderColor));
+                    renderer->drawCircle(xPos + x + handlePos, yPos +y, 12, true, a(isEffectivelyUnlocked ? trackBarSliderMalleableColor : trackBarSliderColor));
                 }
             
-                // CRITICAL FIX: Draw the selection text based on which style is being used
                 if (m_useV2Style) {
-                    // V2 Style: Draw label on left, value on right
                     std::string labelPart = this->m_label;
                     ult::removeTag(labelPart);
                 
                     std::string valuePart = this->m_selection;
                     const auto valueWidth = renderer->getTextDimensions(valuePart, false, 16).first;
-                
-                    renderer->drawString(labelPart, false, this->getX() + 59, this->getY() + 14 + 16, 16, 
-                                       ((!this->m_focused || !ult::useSelectionText) ? defaultTextColor : selectedTextColor));
+                    const s32 labelX = xPos;
+                    const s32 valueX = xPos + width - valueWidth;
             
-                    renderer->drawString(valuePart, false, this->getWidth() -17 - valueWidth, this->getY() + 14 + 16, 16, 
+                    renderer->drawString(labelPart, false, labelX, this->getY() + 14 + 16, 16, 
+                                       ((!this->m_focused || !ult::useSelectionText) ? defaultTextColor : selectedTextColor));
+                    renderer->drawString(valuePart, false, valueX, this->getY() + 14 + 16, 16, 
                                        (this->m_focused && ult::useSelectionValue) ? selectedValueTextColor : onTextColor);
+            
+                    if (m_icon[0] != '\0')
+                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2+2, 30, tsl::style::color::ColorText);
                 } else {
-                    // OLD API Style: Draw selection text CENTERED ABOVE the bar
-                    // This is the original libtesla behavior!
-                    
-                    // Calculate text width to center it (same font size and Y position as V2)
                     const auto textDimensions = renderer->getTextDimensions(this->m_selection, false, 16);
                     const s32 textWidth = textDimensions.first;
+                    const s32 textX = xPos + (width / 2) - (textWidth / 2);
+                    const s32 textY = this->getY() + 14 + 16;
                     
-                    // Center the text horizontally - account for the left margin (59) and right space
-                    // The actual content area starts at getX() + 59 and the trackbar area is getWidth() - 95
-                    const s32 contentStart = 59;
-                    const s32 trackbarWidth = this->getWidth() - 95;
-                    const s32 textX = this->getX() + contentStart + (trackbarWidth / 2) - (textWidth / 2);
-                    const s32 textY = this->getY() + 14 + 16; // Same Y position as V2 style
-                    
-                    // Draw the centered selection text
                     renderer->drawString(this->m_selection.c_str(), false, textX, textY, 16, 
                                        a(this->m_focused ? tsl::style::color::ColorHighlight : tsl::style::color::ColorText));
-                    
-                    // Also draw icon if provided (though usually empty for named step trackbars)
+            
                     if (m_icon[0] != '\0')
-                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2, 23, tsl::style::color::ColorText);
+                        renderer->drawString(this->m_icon, false, this->getX()+42, this->getY() + 50+2+2, 30, tsl::style::color::ColorText);
                 }
             
                 // Draw separators
@@ -8725,6 +9406,11 @@ namespace tsl {
             virtual Element* requestFocus(Element *oldFocus, FocusDirection direction) {
                 return this;
             }
+
+            virtual void setFocused(bool focused) override {
+                Element::setFocused(focused);
+                if (focused) s_lastFocusedItemText = m_label;
+            }
         
             inline void updateAndExecute(bool updateIni = true) {
                 if (m_simpleCallback) {
@@ -8816,8 +9502,7 @@ namespace tsl {
                         m_holding = false;
 
                         if (ult::allowSlide.load(std::memory_order_acquire)) {
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOnSound.store(true, std::memory_order_release);
+                            triggerOnFeedback();
                         }
                     }
                     if (m_unlockedTrackbar || (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire))) {
@@ -8826,8 +9511,7 @@ namespace tsl {
                             triggerClick = true;
                             triggerEnterFeedback();
                         } else if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOffSound.store(true, std::memory_order_release);
+                            triggerOffFeedback();
                         }
                         updateAndExecute();
                     }
@@ -8874,8 +9558,7 @@ namespace tsl {
                     // Handle initial key press
                     if (keysDown & KEY_LEFT || keysDown & KEY_RIGHT) {
                         triggerRumbleClick.store(true, std::memory_order_release);
-                        
-                        // Start tracking the hold
+                        signalFeedback();
                         m_holding = true;
                         m_wasLastHeld = false;
                         m_holdStartTime_ns = ult::nowNs();
@@ -9022,8 +9705,8 @@ namespace tsl {
                     if (touchInSliderBounds) {
                         updateAndExecute();
                         touchInSliderBounds = false;
-                        triggerRumbleDoubleClick.store(true, std::memory_order_release);
-                        triggerOffSound.store(true, std::memory_order_release);
+                        triggerOffFeedback(true);
+                        tsl::shiftItemFocus(this);
                     }
                     return false;
                 }
@@ -9057,8 +9740,7 @@ namespace tsl {
                         touchInSliderBounds = true;
                         if (triggerOnce) {
                             triggerOnce = false;
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOnSound.store(true, std::memory_order_release);
+                            triggerOnFeedback();
                         }
                         
                         // Add 0.5 to round to nearest step instead of truncating
@@ -9101,7 +9783,7 @@ namespace tsl {
             virtual void draw(gfx::Renderer *renderer) override {
                 const u16 handlePos = (this->getWidth() - 95) * (this->m_value - m_minValue) / (m_maxValue - m_minValue);
                 const s32 xPos = this->getX() + 59;
-                const s32 yPos = this->getY() + 40 + 16 - 1;
+                const s32 yPos = this->getY() + 40 + 16 - 3;
                 const s32 width = this->getWidth() - 95;
         
                 const bool shouldAppearLocked = m_unlockedTrackbar && m_keyRHeld;
@@ -9295,6 +9977,23 @@ namespace tsl {
                 m_useClickAnimation = false;
             }
 
+            virtual bool matchesJumpCriteria(const std::string& jumpText, const std::string& jumpValue, bool exactMatch = true) const override {
+                if (jumpText.empty() && jumpValue.empty()) return false;
+
+                bool textMatches, valueMatches;
+                if (exactMatch) {
+                    textMatches = (m_label == jumpText);
+                    valueMatches = (m_selection == jumpValue);
+                } else {
+                    textMatches = (!jumpText.empty() && m_label.find(jumpText) != std::string::npos);
+                    valueMatches = (!jumpValue.empty() && m_selection.find(jumpValue) != std::string::npos);
+                }
+
+                if (jumpText.empty())  return valueMatches;
+                if (jumpValue.empty()) return textMatches;
+                return textMatches && valueMatches;
+            }
+
         protected:
             std::string m_label;
             std::string m_packagePath;
@@ -9397,8 +10096,7 @@ namespace tsl {
                         m_holding = false;
 
                         if (ult::allowSlide.load(std::memory_order_acquire)) {
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOnSound.store(true, std::memory_order_release);
+                            triggerOnFeedback();
                         }
                     }
                     if (m_unlockedTrackbar || (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire))) {
@@ -9407,8 +10105,7 @@ namespace tsl {
                             triggerClick = true;
                             triggerEnterFeedback();
                         } else if (!m_unlockedTrackbar && !ult::allowSlide.load(std::memory_order_acquire)) {
-                            triggerRumbleClick.store(true, std::memory_order_release);
-                            triggerOffSound.store(true, std::memory_order_release);
+                            triggerOffFeedback();
                         }
                         updateAndExecute();
                     }
@@ -9883,7 +10580,7 @@ namespace tsl {
         #endif
     };
 
-    static inline NotificationPrompt* notification = nullptr;
+    inline NotificationPrompt* notification = nullptr;
 
 
     // GUI
@@ -10121,16 +10818,20 @@ namespace tsl {
          *
          */
         void show() {
+            bool signalFeedbackAtEnd = false;
             if (ult::useHapticFeedback) {
                 if (!ult::isHidden.load(std::memory_order_acquire)) {
                     triggerInitHaptics.store(true, std::memory_order_release);
+                    signalFeedbackAtEnd = true;
                 }
             }
             
 
             // reinitialize audio for changes from handheld to docked and vise versa
-            if (!ult::limitedMemory && ult::useSoundEffects)
+            if (ult::useSoundEffects) {
                 reloadIfDockedChangedNow.store(true, std::memory_order_release);
+                signalFeedbackAtEnd = true;
+            }
 
             if (this->m_disableNextAnimation) {
                 this->m_animationCounter = MAX_ANIMATION_COUNTER;
@@ -10146,7 +10847,20 @@ namespace tsl {
             ult::isHidden.store(false);
             
             if (ult::useHapticFeedback) {
-                triggerRumbleClick.store(true, std::memory_order_release);
+                // Skip the click if exit feedback (double click) is about to fire on the
+                // same show — the flag is set just before show() is called in that case.
+                //triggerRumbleClick.store(true, std::memory_order_release);
+
+                if (!skipInitialShowRumbleClick) {
+                    triggerRumbleClick.store(true, std::memory_order_release);
+                    signalFeedbackAtEnd = true;
+                }
+                    
+                skipInitialShowRumbleClick = false; // consume the flag regardless
+            }
+
+            if (signalFeedbackAtEnd) {
+                signalFeedback();
             }
         }
         
@@ -10193,6 +10907,7 @@ namespace tsl {
             this->onHide();
         #endif
             triggerRumbleClick.store(true, std::memory_order_release);
+            signalFeedback();
         }
         
         /**
@@ -10461,6 +11176,7 @@ namespace tsl {
             static bool notificationTouchConsumed = false;
             static constexpr u64 CLICK_THRESHOLD_NS = 340000000ULL;
             static bool hasScrolled = false;
+            static bool hadNonScrollTap = false;
             static void* lastGuiPtr = nullptr;
             static std::array<bool, 4> lastSimulatedTouch = {};
         
@@ -10477,18 +11193,35 @@ namespace tsl {
             }
 
             auto currentFocus = currentGui->getFocusedElement();
-            
-            // Focus color debounce — snap true immediately, delay false
+
+            // Only suppress OK when the focused item has actually been scrolled
+            // *out of* the visible viewport by a long table.  A tiny table at the
+            // bottom (where the last list item is still fully on screen) must NOT
+            // trigger suppression, so we check real pixel bounds rather than just
+            // the isTableScrolling flag.
+            const bool blockOkAction = currentFocus &&
+                tsl::elm::isTableScrolling.load(std::memory_order_acquire) &&
+                (currentFocus->getTopBound()    < static_cast<s32>(ult::activeHeaderHeight) ||
+                 currentFocus->getBottomBound() > static_cast<s32>(tsl::cfg::FramebufferHeight) - 73);
+
+            // Focus color debounce — snap true immediately, delay false.
+            // Also treat out-of-view table-scroll as "unfocused" so the OK
+            // button greys out and its footer touch is suppressed while the
+            // focused item is off-screen.
             {
                 static u64 focusLostTime_ns = 0;
                 static constexpr u64 UNFOCUS_DELAY_NS = 10'000'000ULL;
-                if (currentFocus) {
-                    usingFocusColor = true;
+                if (currentFocus && !blockOkAction) {
+                    selectIsUsingFocusedColor = true;
                     focusLostTime_ns = 0;
                 } else {
-                    const u64 now = ult::nowNs();
-                    if (focusLostTime_ns == 0) focusLostTime_ns = now;
-                    if (now - focusLostTime_ns >= UNFOCUS_DELAY_NS) usingFocusColor = false;
+                    if (!bypassUnfocused) {
+                        const u64 now = ult::nowNs();
+                        if (focusLostTime_ns == 0) focusLostTime_ns = now;
+                        if (now - focusLostTime_ns >= UNFOCUS_DELAY_NS) selectIsUsingFocusedColor = false;
+                    } else {
+                        selectIsUsingFocusedColor = true;
+                    }
                 }
             }
 
@@ -10559,6 +11292,7 @@ namespace tsl {
         
             if (currentGui.get() != lastGuiPtr) {
                 hasScrolled = false;
+                hadNonScrollTap = false;
                 oldTouchEvent = elm::TouchEvent::None;
                 oldTouchDetected = false;
                 oldTouchPos = { 0 };
@@ -10595,6 +11329,7 @@ namespace tsl {
                     !ult::simulatedBack.load(std::memory_order_acquire) &&
                     !ult::simulatedNextPage.load(std::memory_order_acquire) && topElement) {
                     if (oldTouchEvent == elm::TouchEvent::Scroll) hasScrolled = true;
+                    if (hadNonScrollTap) { hasScrolled = true; hadNonScrollTap = false; }
                     if (!hasScrolled) {
                         currentGui->removeFocus();
                         currentGui->requestFocus(topElement, FocusDirection::None);
@@ -10605,12 +11340,28 @@ namespace tsl {
                 }
             }
             
+            // Suppress OK only when the focused item is genuinely off-screen —
+            // blockOkAction is false for small tables where the item is visible.
+            if (blockOkAction)
+                keysDown &= ~KEY_A;
+
+            // Capture raw pointer before any handler call.
+            // After a swapTo fires inside a handler, currentGui (a ref to the
+            // now-popped unique_ptr) becomes dangling.  All post-call checks must
+            // use this raw pointer instead of dereferencing currentGui.
+            tsl::Gui* const guiPtrBefore = currentGui.get();
+
             bool handled = false;
             for (elm::Element* p = currentFocus; !handled && p; p = p->getParent())
                 handled = p->onClick(keysDown) || p->handleInput(keysDown, keysHeld, touchPos, joyStickPosLeft, joyStickPosRight);
             
-            if (currentGui != this->getCurrentGui()) return;
+            // Safe swap-detection: compare raw pointers, not the potentially-dangling reference
+            if (this->m_guiStack.empty() || this->getCurrentGui().get() != guiPtrBefore) return;
             handled |= currentGui->handleInput(keysDown, keysHeld, touchPos, joyStickPosLeft, joyStickPosRight);
+
+            // If a swap fired inside handleInput above, currentGui is now dangling — bail out
+            // before any code below attempts to call methods on it.
+            if (this->m_guiStack.empty() || this->getCurrentGui().get() != guiPtrBefore) return;
 
             // Directional key release tracking
             {
@@ -10634,7 +11385,18 @@ namespace tsl {
                 if (singleArrowKeyPress) {
                     buttonPressTime_ns = lastKeyEventTime_ns = currentTime_ns;
                     hasScrolled = false;
+                    singlePressHandled = false;
                     isNavigatingBackwards.store(false, std::memory_order_release);
+                    // On the very first directional press after touch scroll, restore focus
+                    // to the nearest item and immediately navigate — no wasted frame.
+                    if (topElement && currentGui && keysDown) {
+                        currentGui->removeFocus();
+                        currentGui->requestFocus(topElement, FocusDirection::None);
+                        if      (keysHeld & KEY_UP   ) currentGui->requestFocus(topElement, FocusDirection::Up,    false);
+                        else if (keysHeld & KEY_DOWN ) currentGui->requestFocus(topElement, FocusDirection::Down,  false);
+                        else if (keysHeld & KEY_LEFT ) currentGui->requestFocus(topElement, FocusDirection::Left,  false);
+                        else if (keysHeld & KEY_RIGHT) currentGui->requestFocus(topElement, FocusDirection::Right, false);
+                    }
                 }
             } else {
                 if (!touchDetected && !oldTouchDetected && !handled && currentFocus &&
@@ -10711,6 +11473,7 @@ namespace tsl {
                 auto handleJumpButton = [&](JumpButtonState& s, bool keyPressed, bool notKeyPressed, std::atomic<bool>& jumpSignal) {
                     if (keyPressed) {
                         if (!s.keyWasPressed) { s.pressStart_ns = currentTime_ns; s.wasIsolated = !notKeyPressed; }
+                        if (notKeyPressed) s.wasIsolated = false;  // another key pressed during hold — cancel
                         s.keyWasPressed = true;
                     } else {
                         if (s.keyWasPressed && s.wasIsolated && !notKeyPressed &&
@@ -10746,6 +11509,7 @@ namespace tsl {
                             s.buttonPressStart_ns = s.lastHoldTrigger_ns = currentTime_ns;
                             s.holdTriggered = false;
                         }
+                        if (notKeyPressed) s.wasIsolated = false;  // another key pressed during hold — cancel
                         if (s.inRapidClickMode && s.wasIsolated) {
                             const u64 holdDuration = currentTime_ns - s.buttonPressStart_ns;
                             if (holdDuration >= HOLD_THRESHOLD_NS) {
@@ -10821,7 +11585,7 @@ namespace tsl {
                     shouldTriggerRumble = true;
             };
             checkTouched(backTouched,     ult::touchingBack);
-            if (usingFocusColor) checkTouched(selectTouched, ult::touchingSelect);
+            if (selectIsUsingFocusedColor) checkTouched(selectTouched, ult::touchingSelect);
             checkTouched(nextPageTouched, ult::touchingNextPage);
             if (menuTouched != ult::touchingMenu.exchange(menuTouched, std::memory_order_acq_rel)) {
                 if (menuTouched && (ult::inMainMenu.load(std::memory_order_acquire) ||
@@ -10834,7 +11598,8 @@ namespace tsl {
 
             if (touchDetected) {
                 lastSimulatedTouch = {backTouched, selectTouched, nextPageTouched, menuTouched};
-                ult::interruptedTouch.store((keysHeld & ALL_KEYS_MASK) != 0, std::memory_order_release);
+                //const bool touchInFooter = (touchPos.y > static_cast<u32>(cfg::FramebufferHeight - 73U + 1));
+                ult::interruptedTouch.store(!(touchPos.y > static_cast<u32>(cfg::FramebufferHeight - 73U + 1)) && (keysHeld & ALL_KEYS_MASK) != 0, std::memory_order_release);
 
                 const u32 xd = std::abs(static_cast<s32>(initialTouchPos.x) - static_cast<s32>(touchPos.x));
                 const u32 yd = std::abs(static_cast<s32>(initialTouchPos.y) - static_cast<s32>(touchPos.y));
@@ -10877,6 +11642,10 @@ namespace tsl {
                 }
                 ult::stillTouching.store(true, std::memory_order_release);
             } else {
+                // Detect tap-release: finger was down last frame, now lifted, not a scroll.
+                // Set flag so the focus-restore block two frames later is suppressed.
+                if (oldTouchDetected && oldTouchEvent != elm::TouchEvent::Scroll && !interpreterIsRunning)
+                    hadNonScrollTap = true;
                 for (int i = 0; i < 4; ++i) {
                     if (!lastSimulatedTouch[i]) continue;
                     if (!ult::interruptedTouch.load(std::memory_order_acquire) && !interpreterIsRunning) {
@@ -11002,7 +11771,9 @@ namespace tsl {
 
 
 
-            if (this->m_guiStack.top() != nullptr && this->m_guiStack.top()->m_focusedElement != nullptr)
+            if (!this->m_guiStack.empty() &&
+                this->m_guiStack.top() != nullptr &&
+                this->m_guiStack.top()->m_focusedElement != nullptr)
                 this->m_guiStack.top()->m_focusedElement->resetClickAnimation();
             
             isNavigatingBackwards.store(false, std::memory_order_release);
@@ -11171,7 +11942,7 @@ namespace tsl {
             requiresLNY2 = amsVersionAtLeast(1,10,0);     // Detect if using HOS 21+
 
             // Initialize the audio service
-            if (ult::useSoundEffects && !ult::limitedMemory) {
+            if (ult::useSoundEffects) {
                 ult::Audio::initialize();
             }
 
@@ -11616,7 +12387,7 @@ namespace tsl {
                             ult::FALSE_STR
                         );
                         tsl::setNextOverlay(
-                            ult::OVERLAY_PATH + "ovlmenu.ovl"
+                            returnOverlayPath
                         );
                         tsl::Overlay::get()->close();
                         break;
@@ -11797,20 +12568,109 @@ namespace tsl {
                     
                     #if !IS_LAUNCHER_DIRECTIVE
                                 if (lastOverlayFilename == overlayFileName && lastOverlayMode == modeArg) {
-                    #else
-                                if (lastOverlayFilename == overlayFileName  && lastOverlayMode == modeArg && lastOverlayMode.find("--package") != std::string::npos) {
-                    #endif
                                     ult::setIniFileValue(
                                         ult::ULTRAHAND_CONFIG_INI_PATH,
                                         ult::ULTRAHAND_PROJECT_NAME,
                                         ult::IN_OVERLAY_STR,
                                         ult::TRUE_STR
                                     );
-
-                                    tsl::setNextOverlay(ult::OVERLAY_PATH + "ovlmenu.ovl", "--direct --comboReturn");
+                                    // If this overlay is hidden, always route the returning
+                                    // ovlmenu to the hidden page — hidden overlays are never
+                                    // visible on the normal page so the hidden page is always
+                                    // the correct destination regardless of launch origin.
+                                    {
+                                        const auto hideStatus = ult::parseValueFromIniSection(
+                                            ult::OVERLAYS_INI_FILEPATH, overlayFileName, ult::HIDE_STR);
+                                        if (hideStatus == ult::TRUE_STR) {
+                                            ult::setIniFileValue(ult::ULTRAHAND_CONFIG_INI_PATH,
+                                                ult::ULTRAHAND_PROJECT_NAME,
+                                                ult::IN_HIDDEN_OVERLAY_STR, ult::TRUE_STR);
+                                        }
+                                    }
+                                    tsl::setNextOverlay(returnOverlayPath,
+                                        "--direct --comboReturn --comboReturnFrom " + overlayFileName);
                                     fireLaunch();
                                     return;
                                 }
+                    #else
+                                // Case 1 — overlay/mode match (quick-launch, status-monitor, etc.)
+                                if (lastOverlayFilename == overlayFileName && lastOverlayMode == modeArg) {
+                                    ult::setIniFileValue(
+                                        ult::ULTRAHAND_CONFIG_INI_PATH,
+                                        ult::ULTRAHAND_PROJECT_NAME,
+                                        ult::IN_OVERLAY_STR,
+                                        ult::TRUE_STR
+                                    );
+                                    // If this overlay is hidden, route the returning ovlmenu to
+                                    // the hidden page — set only here (combo-return path), never
+                                    // on fresh launch, so a plain exit never leaves the flag dirty.
+                                    {
+                                        const auto hideStatus = ult::parseValueFromIniSection(
+                                            ult::OVERLAYS_INI_FILEPATH, overlayFileName, ult::HIDE_STR);
+                                        if (hideStatus == ult::TRUE_STR) {
+                                            ult::setIniFileValue(ult::ULTRAHAND_CONFIG_INI_PATH,
+                                                ult::ULTRAHAND_PROJECT_NAME,
+                                                ult::IN_HIDDEN_OVERLAY_STR, ult::TRUE_STR);
+                                        }
+                                    }
+                                    // Build return args. When this overlay was launched in
+                                    // --package mode (e.g. "ovlmenu.ovl --package My Pkg"),
+                                    // the new ovlmenu process must also know which package to
+                                    // return to — append --comboReturnPackage so main() sets
+                                    // to_packages=true and comboReturnPackageName correctly.
+                                    std::string case1Args = "--direct --comboReturn --comboReturnFrom " + overlayFileName;
+                                    {
+                                        static const std::string pkgPfx1 = "--package ";
+                                        if (modeArg.rfind(pkgPfx1, 0) == 0) {
+                                            case1Args += " --comboReturnPackage " + modeArg.substr(pkgPfx1.size());
+                                        }
+                                    }
+                                    tsl::setNextOverlay(returnOverlayPath, case1Args);
+                                    fireLaunch();
+                                    return;
+                                }
+                                // Case 2 — UI-navigated package match.
+                                // Do NOT guard on lastOverlayFilename == overlayFileName: it is
+                                // cleared to "" during the overlays-page build so that check
+                                // always fails inside IS_LAUNCHER.
+                                {
+                                    static const std::string pkgPrefix = "--package ";
+                                    if (!modeArg.empty() && modeArg.rfind(pkgPrefix, 0) == 0) {
+                                        const std::string comboPackagePath = modeArg.substr(pkgPrefix.size());
+                                        // lastOpenPackagePath always ends with '/' (e.g. "sdmc:/…/FolderName/").
+                                        // getNameFromPath returns "" for trailing-slash paths, so strip it first.
+                                        const std::string strippedPkg = (!lastOpenPackagePath.empty() && lastOpenPackagePath.back() == '/')
+                                            ? lastOpenPackagePath.substr(0, lastOpenPackagePath.size() - 1)
+                                            : lastOpenPackagePath;
+                                        if (!strippedPkg.empty() &&
+                                            ult::getNameFromPath(strippedPkg) == comboPackagePath) {
+
+                                            ult::setIniFileValue(
+                                                ult::ULTRAHAND_CONFIG_INI_PATH,
+                                                ult::ULTRAHAND_PROJECT_NAME,
+                                                ult::IN_OVERLAY_STR,
+                                                ult::TRUE_STR
+                                            );
+                                            // If the package was on the hidden page, preserve that
+                                            // so the new ovlmenu boots into hidden-packages mode.
+                                            if (ult::inHiddenMode.load(std::memory_order_acquire)) {
+                                                ult::setIniFileValue(
+                                                    ult::ULTRAHAND_CONFIG_INI_PATH,
+                                                    ult::ULTRAHAND_PROJECT_NAME,
+                                                    ult::IN_HIDDEN_PACKAGE_STR,
+                                                    ult::TRUE_STR
+                                                );
+                                            }
+                                            // Pass the folder name via argv; main() writes
+                                            // to_packages=true and sets comboReturnPackageName.
+                                            tsl::setNextOverlay(returnOverlayPath,
+                                                "--direct --comboReturn --comboReturnPackage " + comboPackagePath);
+                                            fireLaunch();
+                                            return;
+                                        }
+                                    }
+                                }
+                    #endif
                                 
                                 // Compose launch args
                                 std::string finalArgs;
@@ -11865,9 +12725,14 @@ namespace tsl {
                     }
         #else
                     if (idx == WaiterObject_HomeButton || idx == WaiterObject_PowerButton) { // Changed condition to exclude capture button
-                        if (shData->overlayOpen) {
+                        if (shData->overlayOpen && !disableHiding) {
                             tsl::Overlay::get()->hide();
                             shData->overlayOpen = false;
+                        } else if (idx == WaiterObject_HomeButton && disableHiding) {
+                            // Game session — normal hide is suppressed.  Signal the player
+                            // GUI to release foreground (if held) so HID returns to the
+                            // background title.  Consumed by process_home_foreground_release().
+                            homeButtonPressedInGame.store(true, std::memory_order_release);
                         }
                     }
         #endif
@@ -11909,6 +12774,7 @@ namespace tsl {
 
                             triggerInitHaptics.store(true, std::memory_order_release);
                             hidReinitInProgress.store(false, std::memory_order_seq_cst);
+                            signalFeedback();   // wake poller to run initHaptics
                             break;
                             
                             
@@ -11961,83 +12827,102 @@ namespace tsl {
          *
          * @param args Used to pass in a pointer to a \ref SharedThreadData struct
          */
-        static void backgroundFeedbackPoller(void *args) {
-            while (!feedbackPollerStop.load(std::memory_order_acquire)) {
-            
-                if (ult::launchingOverlay.load(std::memory_order_acquire))
-                    break;
-        
-                const u64 nowNs = ult::nowNs();
-        
-                // --- Haptics ---
-                if (ult::useHapticFeedback && !disableHaptics.load(std::memory_order_acquire)
-                    && !hidReinitInProgress.load(std::memory_order_acquire)) {
-                    if (triggerInitHaptics.exchange(false, std::memory_order_acq_rel)) {
-                        ult::initHaptics();
-                    } else {
-                        static u64 lastHapticsCheckNs = 0;
-                        if ((nowNs - lastHapticsCheckNs) >= 300'000'000ULL) {
-                            lastHapticsCheckNs = nowNs;
-                            ult::checkAndReinitHaptics();
-                        }
-                    }
-        
-                    if (triggerRumbleDoubleClick.exchange(false, std::memory_order_acq_rel)) {
-                        triggerRumbleClick.store(false, std::memory_order_release);
-                        ult::rumbleDoubleClick();
-                    } else if (triggerRumbleClick.exchange(false, std::memory_order_acq_rel)) {
-                        ult::rumbleClick();
-                    }
-                    
-                    // Must be called every loop to advance timing state
-                    ult::processRumbleStop(nowNs);
-                    ult::processRumbleDoubleClick(nowNs);
-                } else {
+        // ── Haptics thread ────────────────────────────────────────────────────────
+        // Dedicated thread for haptic feedback. Calls the blocking standalone
+        // rumble functions directly — no timer state machine needed.
+        static void backgroundHapticsPoller(void* /*args*/) {
+            // Initialize haptics once on thread start — equivalent to the call that
+            // lived in backgroundEventPoller before haptics moved to their own thread.
+            // Ensures cachedHandheldStyle/cachedPlayer1Style are valid before the
+            // first rumble trigger arrives. checkAndReinitHaptics() in the loop
+            // handles controller reconnects after this.
+            ult::initHaptics();
+
+            while (true) {
+
+                leventWait(&hapticsEvent, UINT64_MAX);
+                leventClear(&hapticsEvent);
+
+                // Capture both exit conditions before processing triggers so that
+                // exit/launch feedback (double click on return, click on reload)
+                // always completes its full sequence before the thread tears down.
+                const bool stopping  = feedbackPollerStop.load(std::memory_order_acquire);
+                const bool launching = ult::launchingOverlay.load(std::memory_order_acquire);
+
+                if (!ult::useHapticFeedback || disableHaptics.load(std::memory_order_acquire)
+                    || hidReinitInProgress.load(std::memory_order_acquire)) {
+                    triggerInitHaptics.store(false, std::memory_order_release);
                     triggerRumbleClick.store(false, std::memory_order_release);
                     triggerRumbleDoubleClick.store(false, std::memory_order_release);
-                }
-        
-                // --- Sound ---
-                if (!ult::limitedMemory) {
-                    if (!ult::useSoundEffects || disableSound.load(std::memory_order_acquire)) {
-                        triggerNavigationSound.store(false, std::memory_order_release);
-                        triggerEnterSound.store(false, std::memory_order_release);
-                        triggerExitSound.store(false, std::memory_order_release);
-                        triggerWallSound.store(false, std::memory_order_release);
-                        triggerOnSound.store(false, std::memory_order_release);
-                        triggerOffSound.store(false, std::memory_order_release);
-                        triggerSettingsSound.store(false, std::memory_order_release);
-                        triggerMoveSound.store(false, std::memory_order_release);
-                        triggerNotificationSound.store(false, std::memory_order_release);
-                    } else {
-                        if (reloadIfDockedChangedNow.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::reloadIfDockedChanged();
-                        if (reloadSoundCacheNow.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::reloadAllSounds();
-        
-                        if (triggerNavigationSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playNavigateSound();
-                        else if (triggerEnterSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playEnterSound();
-                        else if (triggerExitSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playExitSound();
-                        else if (triggerWallSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playWallSound();
-                        else if (triggerOnSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playOnSound();
-                        else if (triggerOffSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playOffSound();
-                        else if (triggerSettingsSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playSettingsSound();
-                        else if (triggerMoveSound.exchange(false, std::memory_order_acq_rel))
-                            ult::Audio::playMoveSound();
-                        else if (triggerNotificationSound.exchange(false, std::memory_order_acq_rel) && !ult::silenceNotifications)
-                            ult::Audio::playNotificationSound();
-                        
+                } else {
+                    if (triggerInitHaptics.exchange(false, std::memory_order_acq_rel)) {
+                        ult::initHaptics();
+                    } else if (!stopping && !launching) {
+                        ult::checkAndReinitHaptics();
+                    }
+
+                    if (triggerRumbleDoubleClick.exchange(false, std::memory_order_acq_rel)) {
+                        triggerRumbleClick.store(false, std::memory_order_release);
+                        ult::rumbleDoubleClickStandalone();
+                    } else if (triggerRumbleClick.exchange(false, std::memory_order_acq_rel)) {
+                        ult::rumbleClickStandalone();
                     }
                 }
-                
-                svcSleepThread((ult::useSoundEffects || ult::useHapticFeedback) ? 16'000'000ULL : 160'000'000ULL);
+
+                // Break only after triggers are drained — never mid-sequence.
+                if (stopping || launching) break;
+            }
+            ult::deinitHaptics();
+        }
+
+        // ── Sound thread ──────────────────────────────────────────────────────────
+        // Dedicated thread for audio playback. Sleeps until signalled; audio calls
+        // may block freely without affecting haptic timing.
+        static void backgroundSoundPoller(void* /*args*/) {
+            while (!feedbackPollerStop.load(std::memory_order_acquire)) {
+
+                leventWait(&soundEvent, UINT64_MAX);
+                leventClear(&soundEvent);
+
+                if (feedbackPollerStop.load(std::memory_order_acquire)) break;
+                if (ult::launchingOverlay.load(std::memory_order_acquire))  break;
+
+                if (!ult::useSoundEffects || disableSound.load(std::memory_order_acquire)) {
+                    triggerNavigationSound.store(false, std::memory_order_release);
+                    triggerEnterSound.store(false, std::memory_order_release);
+                    triggerExitSound.store(false, std::memory_order_release);
+                    triggerWallSound.store(false, std::memory_order_release);
+                    triggerOnSound.store(false, std::memory_order_release);
+                    triggerOffSound.store(false, std::memory_order_release);
+                    triggerSettingsSound.store(false, std::memory_order_release);
+                    triggerMoveSound.store(false, std::memory_order_release);
+                    triggerNotificationSound.store(false, std::memory_order_release);
+                    continue;
+                }
+
+                if (reloadIfDockedChangedNow.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::reloadIfDockedChanged();
+                if (reloadSoundCacheNow.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::reloadAllSounds();
+
+                if (triggerNavigationSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playNavigateSound();
+                else if (triggerEnterSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playEnterSound();
+                else if (triggerExitSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playExitSound();
+                else if (triggerWallSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playWallSound();
+                else if (triggerOnSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playOnSound();
+                else if (triggerOffSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playOffSound();
+                else if (triggerSettingsSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playSettingsSound();
+                else if (triggerMoveSound.exchange(false, std::memory_order_acq_rel))
+                    ult::Audio::playMoveSound();
+                else if (triggerNotificationSound.exchange(false, std::memory_order_acq_rel) && !ult::silenceNotifications)
+                    ult::Audio::playNotificationSound();
             }
         }
     }
@@ -12234,10 +13119,17 @@ namespace tsl {
                 ult::DOWNLOAD_READ_BUFFER = 131072*4;
                 ult::DOWNLOAD_WRITE_BUFFER = 131072*4;
             }
-        } else if (ult::limitedMemory) {
+        } else if (!ult::limitedMemory) {
+            ult::COPY_BUFFER_SIZE = 262144;
+            ult::HEX_BUFFER_SIZE = 8192;
+            ult::UNZIP_READ_BUFFER = 262144;
+            ult::UNZIP_WRITE_BUFFER = 131072;
+            ult::DOWNLOAD_READ_BUFFER = 131072;
+            ult::DOWNLOAD_WRITE_BUFFER = 131072;
+        } else {
             ult::loaderTitle += "-";
-            ult::DOWNLOAD_READ_BUFFER = 16*1024;
-            ult::UNZIP_READ_BUFFER = 16*1024;
+            //ult::DOWNLOAD_READ_BUFFER = 16*1024;
+            //ult::UNZIP_READ_BUFFER = 16*1024;
         }
     #endif
     
@@ -12246,15 +13138,28 @@ namespace tsl {
     
             lastOverlayMode.clear();
             bool skip;
+            // --comboReturnPackage takes a multi-word value (package names may contain spaces).
+            // Track when we're consuming its value words so they don't leak into lastOverlayMode.
+            bool skippingMultiWordValue = false;
             for (u8 arg = 1; arg < argc; arg++) {
                 const char* s = argv[arg];
 
                 skip = false;
+
+                // If the previous flag was --comboReturnPackage, consume all non-flag words
+                // that belong to its value (e.g. "My" and "Package" for "My Package").
+                if (skippingMultiWordValue) {
+                    if (!(s[0] == '-' && s[1] == '-')) {
+                        continue;  // Still a value word — skip it
+                    }
+                    skippingMultiWordValue = false;  // Hit a new flag; stop consuming
+                }
     
                 if (arg > 1) {
                     const char* prev = argv[arg - 1];
                     if (prev[0] == '-' && prev[1] == '-') {
-                        if (strcmp(prev, "--lastTitleID") == 0 || strcmp(prev, "--foregroundFix") == 0) {
+                        if (strcmp(prev, "--lastTitleID") == 0 || strcmp(prev, "--foregroundFix") == 0 ||
+                            strcmp(prev, "--comboReturnFrom") == 0 || strcmp(prev, "--comboReturnPackage") == 0) {
                             skip = true;
                         }
                     }
@@ -12264,8 +13169,16 @@ namespace tsl {
                     if (strcmp(s, "--direct") == 0 ||
                         strcmp(s, "--skipCombo") == 0 ||
                         strcmp(s, "--lastTitleID") == 0 ||
-                        strcmp(s, "--foregroundFix") == 0) {
+                        strcmp(s, "--foregroundFix") == 0 ||
+                        strcmp(s, "--comboReturn") == 0 ||
+                        strcmp(s, "--playerReturn") == 0 ||
+                        strcmp(s, "--comboReturnFrom") == 0 ||
+                        strcmp(s, "--comboReturnPackage") == 0) {
                         skip = true;
+                        // --comboReturnPackage value may be multi-word; arm the skip state
+                        if (strcmp(s, "--comboReturnPackage") == 0) {
+                            skippingMultiWordValue = true;
+                        }
                     }
                 }
     
@@ -12291,6 +13204,19 @@ namespace tsl {
             }
         }
     
+        // Detect -returning: overlay was launched as a return from a sub-mode
+        // (e.g. windowed → normal).  Uses exit feedback instead of enter feedback.
+        // Only needed in the non-STATUS_MONITOR, non-LAUNCHER path below.
+        #if !IS_STATUS_MONITOR_DIRECTIVE && !IS_LAUNCHER_DIRECTIVE
+        bool isReturningLaunch = false;
+        for (u8 arg = 1; arg < argc; arg++) {
+            if (strcmp(argv[arg], "-returning") == 0) {
+                isReturningLaunch = true;
+                break;
+            }
+        }
+        #endif
+
         bool skipCombo = false;
     #if IS_LAUNCHER_DIRECTIVE
         bool comboReturn = false;
@@ -12370,10 +13296,14 @@ namespace tsl {
 
         eventCreate(&shData.comboEvent, false);
 
-        Thread backgroundFeedbackThread;
-        threadCreate(&backgroundFeedbackThread, impl::backgroundFeedbackPoller, nullptr, nullptr, 0x1000, 0x2c, -2);
-        threadStart(&backgroundFeedbackThread);
+        Thread backgroundHapticsThread;
+        threadCreate(&backgroundHapticsThread, impl::backgroundHapticsPoller, nullptr, nullptr, 0x1000, 0x2c, -2);
+        threadStart(&backgroundHapticsThread);
 
+        Thread backgroundSoundThread;
+        threadCreate(&backgroundSoundThread, impl::backgroundSoundPoller, nullptr, nullptr, 0x1000, 0x2c, -2);
+        threadStart(&backgroundSoundThread);
+        
         Thread backgroundEventThread;
         threadCreate(&backgroundEventThread, impl::backgroundEventPoller, &shData, nullptr, 0x2000, 0x2c, -2);
         threadStart(&backgroundEventThread);
@@ -12459,6 +13389,17 @@ namespace tsl {
                 shData.overlayOpen.store(false, std::memory_order_release);
             };
 
+            // Suppress the click in show() when exit feedback (double click)
+            // is about to fire on the first loop iteration — let the double
+            // click stand alone rather than stacking a click on top of it.
+            #if IS_LAUNCHER_DIRECTIVE
+            skipInitialShowRumbleClick = shouldFireEvent && !comboReturn && !ult::firstBoot;
+            #elif IS_STATUS_MONITOR_DIRECTIVE
+            skipInitialShowRumbleClick = (lastMode.compare("returning") == 0);
+            #else
+            skipInitialShowRumbleClick = !directMode;
+            #endif
+
             while (shData.running.load(std::memory_order_acquire)) {
                 // Early exit if launching new overlay
                 if (ult::launchingOverlay.load(std::memory_order_acquire)) {
@@ -12540,7 +13481,7 @@ namespace tsl {
                             launchComboHasTriggered.store(true, std::memory_order_release); // for isolating sound effect
     
                             if (usingPackageLauncher || directMode) {
-                                tsl::setNextOverlay(ult::OVERLAY_PATH + "ovlmenu.ovl");
+                                tsl::setNextOverlay(returnOverlayPath);
                             }
                             
                             hlp::requestForeground(false);
@@ -12612,7 +13553,11 @@ namespace tsl {
                                 triggerEnterFeedback();
                             }
                             #else
-                            triggerEnterFeedback();
+                            if (isReturningLaunch) {
+                                triggerExitFeedback();
+                            } else {
+                                triggerEnterFeedback();
+                            }
                             #endif
                         }
                         #endif
@@ -12666,13 +13611,8 @@ namespace tsl {
 
             // Ensure background thread is fully stopped before overlay cleanup
             shData.running.store(false, std::memory_order_release);
-            feedbackPollerStop.store(true, std::memory_order_release);
-
             threadWaitForExit(&backgroundEventThread);
             threadClose(&backgroundEventThread);
-
-            threadWaitForExit(&backgroundFeedbackThread);
-            threadClose(&backgroundFeedbackThread);
             
             // Cleanup overlay resources
             hlp::requestForeground(false);
@@ -12680,17 +13620,22 @@ namespace tsl {
             overlay->exitServices();
             delete overlay;
             
+            #if !IS_LAUNCHER_DIRECTIVE
+            if (directMode && !launchComboHasTriggered.load(std::memory_order_acquire) && !skipClosingExitFeedback) {
+                triggerExitFeedback();
+            }
+            #endif
+
+            // Stop feedback threads after overlay is closed / deleted.
+            feedbackPollerStop.store(true, std::memory_order_release);
+            signalFeedback();   // wake both threads so they see the stop flag
+            threadWaitForExit(&backgroundHapticsThread);
+            threadClose(&backgroundHapticsThread);
+
+            threadWaitForExit(&backgroundSoundThread);
+            threadClose(&backgroundSoundThread);
             
             eventClose(&shData.comboEvent);
-
-
-            if (directMode && !launchComboHasTriggered.load(std::memory_order_acquire)) {
-                if (!disableSound.load(std::memory_order_acquire) && ult::useSoundEffects)
-                    ult::Audio::playExitSound();
-                if (ult::useHapticFeedback) {
-                    ult::rumbleDoubleClickStandalone();
-                }
-            }
     
             return 0;
         }
@@ -12773,8 +13718,7 @@ extern "C" {
     void __appExit(void) {
         delete tsl::notification;
         eventClose(&tsl::notificationEvent);
-        if (!ult::limitedMemory)
-            ult::Audio::exit();
+        ult::Audio::exit();
 
         spsmExit();
         splExit();
@@ -12799,4 +13743,5 @@ extern "C" {
 
 }
 
+//#pragma GCC diagnostic pop
 #endif
